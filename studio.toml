@@ -1,0 +1,55 @@
+timezone = "Europe/Moscow"
+payroll_period = "semimonthly"
+rooms = ["4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"]
+
+# Verified on 2026-10-16 through the connected Google Drive account.
+[payroll_reference]
+spreadsheet_id = "13_fSafqw6gd-06ElpFm8wOLiH9Nia7Cg2MX-kV1l7w8"
+sheet_id = 1405530185
+
+# Admin reports use full daily gross from Checks (USD).
+# Model earnings and new advance snapshots apply the model percentage.
+# Server authentication uses a separate read-only service account.
+[[payroll_sources]]
+format = "studio_daily_share"
+calculation_confirmed = true
+spreadsheet_id = "13_fSafqw6gd-06ElpFm8wOLiH9Nia7Cg2MX-kV1l7w8"
+month = "2026-10"
+range = "'Чеки'!H1:AR"
+shares_range = "'Модели'!G1:J"
+placeholder_names = ["Работающие модели"]
+
+# For another month, add a separate studio_daily_share source with its file,
+# month and verified ranges. Keep previous sources for historical periods.
+# Generic flat sources remain supported, but must not be mixed with this format.
+# [[payroll_sources]]
+# spreadsheet_id = "YOUR_SPREADSHEET_ID"
+# range = "'Payroll'!A:E"
+# [payroll_sources.columns]
+# record_id = "record_id"
+# date = "date"
+# model_id = "model_id"
+# model_name = "model_name"
+# amount_usd = "amount_usd"
+
+# September: the workbook totals include the following October 1 column.
+# It is reconciled, but excluded from September earnings.
+[[payroll_sources]]
+format = "studio_daily_share"
+calculation_confirmed = true
+spreadsheet_id = "19HbKh_Z6ZVK-gNpXK62UR-qkeIUUZVncpOJOz7XV7_Y"
+month = "2026-09"
+range = "'Чеки'!H1:AR"
+shares_range = "'Модели'!G1:J"
+placeholder_names = ["Работающие модели"]
+totals_include_next_month_day = true
+inactive_names = ["Катя Erica", "Вика Kim", "Милана Anna", "Настя Eva", "Саша Sara"]
+
+[room_photos]
+"4" = ["assets/rooms/4-1.png", "assets/rooms/4-2.png"]
+"8" = ["assets/rooms/8-1.png", "assets/rooms/8-2.png"]
+"9" = ["assets/rooms/9-1.png", "assets/rooms/9-2.png"]
+"10" = ["assets/rooms/10-1.png", "assets/rooms/10-2.png"]
+"12" = ["assets/rooms/12-1.png", "assets/rooms/12-2.png"]
+"13" = ["assets/rooms/13-1.png", "assets/rooms/13-2.png"]
+"14" = ["assets/rooms/14-1.png", "assets/rooms/14-2.png"]

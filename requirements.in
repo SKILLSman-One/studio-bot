@@ -1,0 +1,6 @@
+# Direct runtime dependencies. requirements.txt is the resolved installation lock.
+aiogram==3.31.0
+python-dotenv==1.2.3
+google-auth==2.62.0
+requests==2.34.2
+tzdata==2026.5

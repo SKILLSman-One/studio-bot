@@ -29,6 +29,7 @@ FILES = (
     "CheckGoogle.cmd",
     "Verify.cmd",
     "bootstrap.py",
+    "main.py",
     "Server.sh",
     "package_release.py",
 )

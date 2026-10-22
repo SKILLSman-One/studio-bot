@@ -8,6 +8,7 @@ import sys
 import time
 
 from aiogram import Bot
+from aiogram.exceptions import TelegramNetworkError
 from dotenv import dotenv_values, set_key
 
 from . import __version__
@@ -24,6 +25,16 @@ from .ui import UI
 class SafeFormatter(logging.Formatter):
     def format(self, record):
         return f"{record.levelname}: {record.name} (подробности скрыты)"
+
+
+def network_failure_types(error):
+    """Expose exception types only: request URLs may contain the bot token."""
+    result, seen = [], set()
+    while error is not None and id(error) not in seen and len(result) < 6:
+        seen.add(id(error))
+        result.append(type(error).__name__)
+        error = error.__cause__ or error.__context__
+    return " → ".join(result)
 
 
 def setup():
@@ -146,6 +157,13 @@ def main():
     except KeyboardInterrupt:
         print("Бот остановлен. Начатые смены сохранены и продолжат отображаться после запуска.")
         return 0
+    except TelegramNetworkError as error:
+        print(
+            "Нет соединения с Telegram API: " + network_failure_types(error) + ". "
+            "Проверьте исходящий HTTPS-доступ хостинга к api.telegram.org:443. "
+            "Адреса запросов и токен не выводятся."
+        )
+        return 1
     except (UserError, ValueError) as error:
         print(
             str(error)

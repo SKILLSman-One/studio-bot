@@ -4,6 +4,17 @@ import sys
 import tomllib
 from pathlib import Path
 
+from aiogram.exceptions import TelegramNetworkError
+
+from studio_bot.__main__ import network_failure_types
+
+
+def test_network_diagnostic_keeps_urls_and_credentials_private():
+    failure = TelegramNetworkError(method=None, message="bot-secret-token/request")
+    failure.__cause__ = TimeoutError("https://api.telegram.org/bot-secret-token/getMe")
+    failure.__cause__.__context__ = failure
+    assert network_failure_types(failure) == "TelegramNetworkError → TimeoutError"
+
 
 def test_uv_hosting_installs_the_same_runtime_dependencies_as_pip():
     root = Path(__file__).resolve().parents[1]

@@ -1,7 +1,21 @@
 import os
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
+
+
+def test_uv_hosting_installs_the_same_runtime_dependencies_as_pip():
+    root = Path(__file__).resolve().parents[1]
+    metadata = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf8"))
+    pinned = {
+        line.strip()
+        for line in (root / "requirements.txt").read_text(encoding="utf8").splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    }
+    assert set(metadata["project"]["dependencies"]) == pinned
+    assert metadata["project"]["requires-python"] == ">=3.11"
+    assert metadata["tool"]["uv"]["package"] is False
 
 
 def test_check_google_without_tokens_or_key_has_readable_error(tmp_path):

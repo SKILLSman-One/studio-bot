@@ -7,6 +7,7 @@ import re
 import sys
 import time
 
+import requests
 from aiogram import Bot
 from aiogram.exceptions import TelegramNetworkError
 from dotenv import dotenv_values, set_key
@@ -163,6 +164,11 @@ def main():
             "Проверьте исходящий HTTPS-доступ хостинга к api.telegram.org:443. "
             "Адреса запросов и токен не выводятся."
         )
+        try:
+            response = requests.get("https://api.telegram.org", timeout=10)
+            print(f"Проверка HTTPS к Telegram без токена: HTTP {response.status_code}.")
+        except requests.RequestException as probe_error:
+            print("Проверка HTTPS к Telegram без токена: " + network_failure_types(probe_error))
         return 1
     except (UserError, ValueError) as error:
         print(

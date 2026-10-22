@@ -28,6 +28,7 @@ def button_label(label, action):
         "people": "👥",
         "bookings": "📋",
         "calendar": "🗓",
+        "calendarview": "🗓",
         "advances": "💌",
         "tickets": "💬",
         "health": "🩺",

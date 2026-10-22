@@ -1,6 +1,6 @@
 [project]
 name = "studio-bot"
-version = "0.7.2"
+version = "0.7.3"
 requires-python = ">=3.11"
 # Keep this list in sync with requirements.txt: some hosts prefer uv over pip.
 dependencies = [

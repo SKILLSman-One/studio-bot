@@ -595,7 +595,8 @@ class UI:
             await self.send(
                 "model",
                 uid,
-                f"🚪 {room_name(data['room'])}\n{self.when(data['start'])} — {self.when(data['end'])}\n\n{detail}\nЕсли время займут до подтверждения, запрос отправится администратору.",
+                self.visit_period(data["start"], data["end"])
+                + f"\n🚪 {room_name(data['room'])}\n\n{detail}\nЕсли время займут, запрос рассмотрит администратор.",
                 [
                     [
                         (
@@ -626,7 +627,9 @@ class UI:
                     if state == "conflict"
                     else "✅ Комната за тобой, UwU ♡"
                 )
-                + f"\n{room_name(data['room'])} · {self.when(data['start'])} — {self.when(data['end'])}",
+                + "\n\n"
+                + self.visit_period(data["start"], data["end"])
+                + f"\n🚪 {room_name(data['room'])}",
                 [[("Мои записи", "mybookings:0"), ("Добавить ещё", "week")]],
             )
         elif action == "mybookings":
@@ -773,7 +776,9 @@ class UI:
         await self.send(
             "model",
             uid,
-            f"🚪 Выбери комнату ♡\n{self.when(data['start'])} — {self.when(data['end'])}\n\n🟢 Свободна на весь интервал\n🟡 Есть пересечение — можно отправить запрос администратору",
+            "🚪 Выбери комнату ♡\n\n"
+            + self.visit_period(data["start"], data["end"])
+            + "\n\n🟢 Свободна\n🟡 Есть пересечение — на разбор администратору",
             rows + [[("Другой день", "week"), ("Отмена", "home")]],
         )
 
@@ -973,6 +978,75 @@ class UI:
             text += "\nАктуальность данных за текущий месяц проверить не удалось."
         await self.send("admin", uid, text, [[("Проверить снова", "health")], [("Меню", "home")]])
 
+    def visit_period(self, started, ended):
+        start = datetime.fromtimestamp(started, self.settings.zone)
+        end = datetime.fromtimestamp(ended, self.settings.zone)
+        weekday = ("Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс")[start.weekday()]
+        heading = f"📅 {weekday}, {start:%d.%m}"
+        interval = f"🕒 {start:%H:%M}–{end:%H:%M}"
+        days = (end.date() - start.date()).days
+        if days:
+            interval += " · на следующий день" if days == 1 else f" · через {days} дн."
+        return f"{heading}\n{interval}"
+
+    def booking_block(self, row, include_name=False):
+        lines = self.visit_period(row["started"], row["ended"]).splitlines()
+        if include_name:
+            lines[0] += f" · {row['name']}"
+        room = room_name(row["room"]) if row["room"] else "комната не назначена"
+        lines.append(f"🚪 {room}")
+        if row["state"] != "approved":
+            lines.append(LABELS[row["state"]])
+        return "\n".join(lines)
+
+    async def calendar_people(self, uid, page):
+        people = sorted(
+            self.store.all("SELECT user_id,name FROM people WHERE status='approved' AND banned=0"),
+            key=lambda person: (person["name"].casefold(), person["user_id"]),
+        )
+        page = min(max(0, page), max(0, (len(people) - 1) // PAGE))
+        rows = [
+            [(person["name"], f"calendarview:{person['user_id']}:0")]
+            for person in people[page * PAGE : (page + 1) * PAGE]
+        ]
+        if people:
+            rows.append([("Все сотрудники", "calendarview:0:0")])
+        await self.send(
+            "admin",
+            uid,
+            "🗓 Чьё расписание хотим посмотреть?"
+            if people
+            else "🗓 Подтверждённых сотрудников пока нет.",
+            rows + self.pages("calendar", page, len(people)),
+        )
+
+    async def calendar_schedule(self, uid, target, page):
+        person = self.store.user(target) if target else None
+        if target and (not person or person["status"] != "approved" or person["banned"]):
+            raise UserError("Сотрудник недоступен. Выберите сотрудника заново.")
+        records = self.store.all(
+            "SELECT b.*,p.name FROM bookings b JOIN people p USING(user_id) "
+            "WHERE b.state='approved' AND b.ended>? AND p.status='approved' AND p.banned=0 "
+            + ("AND b.user_id=? " if target else "")
+            + "ORDER BY b.started,b.room,b.id",
+            (self.store.clock(), target) if target else (self.store.clock(),),
+        )
+        page = min(max(0, page), max(0, (len(records) - 1) // PAGE))
+        lines = [f"🗓 Расписание · {person['name']}" if person else "🗓 Расписание · все сотрудники"]
+        lines += [
+            self.booking_block(row, include_name=not target)
+            for row in records[page * PAGE : (page + 1) * PAGE]
+        ]
+        if not records:
+            lines.append("Предстоящих записей пока нет.")
+        await self.send(
+            "admin",
+            uid,
+            "\n\n".join(lines),
+            [[("Обновить", f"calendarview:{target}:{page}"), ("Выбрать сотрудника", "calendar:0")]]
+            + self.pages(f"calendarview:{target}", page, len(records)),
+        )
+
     async def list_bookings(self, role, uid, page):
         if role == "model":
             records = self.store.all(
@@ -985,10 +1059,12 @@ class UI:
                 (self.store.clock(),),
             )
         page = min(max(0, page), max(0, (len(records) - 1) // PAGE))
-        lines, rows = ["📋 Записи:"], []
+        lines, rows = ["📋 Мои записи" if role == "model" else "📋 Записи:"], []
         for row in records[page * PAGE : (page + 1) * PAGE]:
             lines.append(
-                f"#{row['id']} • {row['name']} • {self.when(row['started'])}–{self.when(row['ended'])} • {LABELS[row['state']]} • {room_name(row['room']) if row['room'] else 'комната не назначена'}"
+                self.booking_block(row)
+                if role == "model"
+                else f"#{row['id']} • {row['name']} • {self.when(row['started'])}–{self.when(row['ended'])} • {LABELS[row['state']]} • {room_name(row['room']) if row['room'] else 'комната не назначена'}"
             )
             if role == "admin":
                 rows.append([(f"Рассмотреть #{row['id']}", f"booking:{row['id']}")])
@@ -996,13 +1072,15 @@ class UI:
                 row["state"] in {"pending", "approved", "conflict"}
                 and row["started"] > self.store.clock()
             ):
-                rows.append([(f"Отменить #{row['id']}", f"cancelbook:{row['id']}")])
+                rows.append(
+                    [(f"Отменить · {self.when(row['started'])}", f"cancelbook:{row['id']}")]
+                )
         if not records:
             lines.append("Нет актуальных заявок.")
         await self.send(
             role,
             uid,
-            "\n".join(lines),
+            ("\n\n" if role == "model" else "\n").join(lines),
             rows + self.pages("mybookings" if role == "model" else "bookings", page, len(records)),
         )
 
@@ -1242,23 +1320,9 @@ class UI:
             self.store.decide_booking(int(p[1]), uid, room=room, reject=action == "rejectbook")
             await self.list_bookings("admin", uid, 0)
         elif action == "calendar":
-            rows = self.store.all(
-                "SELECT b.*,p.name FROM bookings b JOIN people p USING(user_id) WHERE state='approved' AND ended>? ORDER BY started,room",
-                (self.store.clock(),),
-            )
-            await self.send(
-                "admin",
-                uid,
-                "Подтверждённое расписание:\n\n"
-                + (
-                    "\n".join(
-                        f"{self.when(r['started'])}–{self.when(r['ended'])} • {room_name(r['room'])} • {r['name']}"
-                        for r in rows
-                    )
-                    or "Броней пока нет."
-                ),
-                [[("Обновить", "calendar"), ("Меню", "home")]],
-            )
+            await self.calendar_people(uid, int(p[1]) if len(p) > 1 else 0)
+        elif action == "calendarview":
+            await self.calendar_schedule(uid, int(p[1]), int(p[2]))
         elif action in {"advances", "tickets"}:
             table, cond, prefix = (
                 ("advances", "a.state IN ('pending','approved')", "advanceitem")

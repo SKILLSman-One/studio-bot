@@ -31,6 +31,7 @@ async def test_admin_ban_unban_preserves_profile_history_and_releases_resources(
     await click(ui, "contact", 10)
     token = await confirm_access(ui, 10, "ban")
     assert ui.store.is_banned(10) and not ui.store.active_shifts()
+    assert ui.store.user(10)["payroll_id"] is None
     assert ui.store.one("SELECT state FROM bookings WHERE id=?", (bid,))["state"] == "cancelled"
     assert ui.store.one("SELECT state FROM advances WHERE id=?", (aid,))["state"] == "pending"
     assert (
@@ -41,11 +42,11 @@ async def test_admin_ban_unban_preserves_profile_history_and_releases_resources(
     assert ui.store.is_banned(10)
     await confirm_access(ui, 10, "unban")
     assert not ui.store.is_banned(10)
-    assert ui.store.user(10)["payroll_id"] == "m10"
+    assert ui.store.user(10)["payroll_id"] is None
     assert ui.store.user(10)["status"] == "approved"
     assert not ui.store.active_shifts()
     await click(ui, "salary:current", 10)
-    assert "$125.50" in texts(ui)
+    assert "ещё не привязал" in texts(ui)
     assert (
         ui.store.one("SELECT count(*) n FROM audit WHERE action IN ('ban_person','unban_person')")[
             "n"
@@ -104,7 +105,7 @@ async def test_access_change_requires_admin_and_fresh_confirmation(ui):
         ui.store.set_banned(99, True, 99)
 
 
-def test_migration_and_ban_survive_restart_without_losing_binding(tmp_path):
+def test_migration_and_ban_survive_restart_with_released_binding(tmp_path):
     path = tmp_path / "legacy.sqlite3"
     db = sqlite3.connect(path)
     db.executescript(SCHEMA)
@@ -124,7 +125,30 @@ def test_migration_and_ban_survive_restart_without_losing_binding(tmp_path):
     with pytest.raises(UserError):
         restored.ticket(10, "Недоступно")
     restored.set_banned(10, False, 99)
-    assert restored.approved(10)["payroll_id"] == "m10"
+    assert restored.approved(10)["payroll_id"] is None
+    restored.register(30, "Новая модель", "", "")
+    restored.approve_person(30, "m10", 99)
+    assert restored.approved(30)["payroll_id"] == "m10"
+    restored.close()
+
+
+def test_upgrade_releases_aliases_of_already_banned_people(tmp_path):
+    path = tmp_path / "previous.sqlite3"
+    store = Store(path)
+    store.register(10, "Аня", "", "")
+    store.approve_person(10, "m10", 99)
+    with store.db:
+        store.db.execute("UPDATE people SET banned=1 WHERE user_id=10")
+    epoch = store.callback_epoch
+    store.close()
+    restored = Store(path)
+    assert restored.is_banned(10)
+    assert restored.user(10)["payroll_id"] is None
+    assert restored.callback_epoch == epoch
+    restored.register(20, "Другая Аня", "", "")
+    restored.approve_person(20, "m10", 99)
+    restored.set_banned(10, False, 99)
+    assert restored.user(10)["payroll_id"] is None
     restored.close()
 
 

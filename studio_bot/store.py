@@ -47,6 +47,9 @@ CREATE TABLE IF NOT EXISTS admin_recipients(user_id INTEGER PRIMARY KEY, passwor
 CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, actor INTEGER, action TEXT NOT NULL,
  target INTEGER, created REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS runtime_state(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS announcements(
+ id INTEGER PRIMARY KEY, token TEXT NOT NULL UNIQUE, actor INTEGER NOT NULL,
+ text TEXT NOT NULL, created REAL NOT NULL);
 """
 
 
@@ -76,6 +79,18 @@ class Store:
                 "INSERT OR IGNORE INTO runtime_state VALUES ('callback_epoch',?)",
                 (secrets.token_hex(4),),
             )
+            if "announcement_id" not in {
+                r["name"] for r in self.db.execute("PRAGMA table_info(outbox)")
+            }:
+                self.db.execute(
+                    "ALTER TABLE outbox ADD COLUMN announcement_id INTEGER REFERENCES announcements"
+                )
+            self.db.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS announcement_recipient "
+                "ON outbox(announcement_id,user_id) WHERE announcement_id IS NOT NULL"
+            )
+            # Existing blocked profiles must also release their payroll aliases.
+            self.db.execute("UPDATE people SET payroll_id=NULL WHERE banned=1 AND payroll_id IS NOT NULL")
 
     @property
     def callback_epoch(self):
@@ -86,6 +101,7 @@ class Store:
         with self.db:
             for table in (
                 "outbox",
+                "announcements",
                 "audit",
                 "tickets",
                 "advances",
@@ -137,6 +153,7 @@ class Store:
                 raise UserError("Статус уже изменён. Обновите карточку модели.")
             self.db.execute("UPDATE people SET banned=? WHERE user_id=?", (int(banned), uid))
             if banned:
+                self.db.execute("UPDATE people SET payroll_id=NULL WHERE user_id=?", (uid,))
                 self.db.execute(
                     "UPDATE shifts SET ended=max(started,?),ended_by=? WHERE user_id=? AND ended IS NULL",
                     (self.clock(), actor, uid),
@@ -161,6 +178,41 @@ class Store:
 
     def enqueue(self, role, uid, text):
         self.db.execute("INSERT INTO outbox(role,user_id,text) VALUES (?,?,?)", (role, uid, text))
+
+    def announcement_recipients(self, actor):
+        return self.all(
+            "SELECT user_id,name FROM people "
+            "WHERE status='approved' AND banned=0 AND user_id<>? ORDER BY name,user_id",
+            (actor,),
+        )
+
+    def announce(self, actor, token, text, recipients):
+        text = text.strip()
+        if not text or len(text.encode("utf-16-le")) // 2 > 3500:
+            raise UserError("Объявление: от 1 до 3500 символов, одним текстом.")
+        with self.db:
+            existing = self.one("SELECT * FROM announcements WHERE token=?", (token,))
+            if existing:
+                if existing["actor"] != actor or existing["text"] != text:
+                    raise UserError("Подтверждение объявления устарело.")
+                return existing["id"]
+            selected = set(recipients)
+            eligible = [
+                r["user_id"] for r in self.announcement_recipients(actor)
+                if r["user_id"] in selected
+            ]
+            if not eligible:
+                raise UserError("Получателей нет: нужны одобренные сотрудники без блокировки.")
+            aid = self.db.execute(
+                "INSERT INTO announcements(token,actor,text,created) VALUES (?,?,?,?)",
+                (token, actor, text, self.clock()),
+            ).lastrowid
+            self.db.executemany(
+                "INSERT INTO outbox(role,user_id,text,announcement_id) VALUES ('model',?,?,?)",
+                [(uid, text, aid) for uid in eligible],
+            )
+            self.audit(actor, "announcement", aid)
+        return aid
 
     def alert_admins(self, ids, text):
         with self.db:

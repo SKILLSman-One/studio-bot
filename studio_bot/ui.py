@@ -177,6 +177,7 @@ class UI:
                     [("Записи на разбор", "bookings:0"), ("Расписание", "calendar")],
                     [("Полный оборот моделей", "salary")],
                     [("Авансы", "advances:0"), ("Обращения", "tickets:0")],
+                    [("Объявление всем", "announcement")],
                     [("Состояние бота", "health"), ("Уведомления", "delivery")],
                     [("Выйти", "logout")],
                 ],
@@ -339,6 +340,27 @@ class UI:
                     uid,
                     "Ответ сохранён и поставлен в очередь доставки.",
                     [[("Обращения", "tickets:0")]],
+                )
+            elif state[0] in {"announcement_text", "announcement_confirm"} and role == "admin":
+                body = text.strip()
+                if not body or len(body.encode("utf-16-le")) // 2 > 3500:
+                    raise UserError("Объявление: от 1 до 3500 символов, одним текстом.")
+                recipients = tuple(r["user_id"] for r in self.store.announcement_recipients(uid))
+                if not recipients:
+                    raise UserError("Получателей нет: нужны одобренные сотрудники без блокировки.")
+                draft = dict(
+                    text=body, recipients=recipients, token=secrets.token_hex(6),
+                    issued=self.store.clock(),
+                )
+                self.pending[key] = ("announcement_confirm", draft)
+                await self.send(role, uid, body)
+                await self.send(
+                    role, uid,
+                    f"📣 Предпросмотр объявления\n\nПолучателей: {len(recipients)}.\n"
+                    "Одобренные сотрудники без блокировки. Новые анкеты в ожидании не включены.\n\n"
+                    "Текст выше будет отправлен после подтверждения. Чтобы изменить его, пришлите новый текст.",
+                    [[("Отправить всем", f"announcementconfirm:{draft['token']}")],
+                     [("Отмена", "home")]],
                 )
             elif state[0] == "advance_amount" and role == "model":
                 amount, currency = amount_input(text)
@@ -1107,6 +1129,10 @@ class UI:
 
     async def admin_action(self, uid, p):
         action, key = p[0], ("admin", uid)
+        if action != "announcementconfirm" and self.pending.get(key, (None,))[0] in {
+            "announcement_text", "announcement_confirm"
+        }:
+            self.pending.pop(key, None)
         if action == "logout":
             self.auth.logout(uid)
             self.pending.pop(key, None)
@@ -1193,9 +1219,9 @@ class UI:
             self.pending[key] = ("access_confirm", target, choice, token, self.store.clock())
             detail = (
                 "Доступ к боту закроется. Текущая смена завершится, оставшиеся записи отменятся. "
-                "История и заявки на аванс сохранятся."
+                "Привязка к таблице освободится. История и заявки на аванс сохранятся."
                 if choice == "ban"
-                else "Доступ вернётся с прежним статусом анкеты и привязкой к таблице. "
+                else "Доступ вернётся с прежним статусом анкеты. Имя из таблицы нужно выбрать заново. "
                 "Завершённые смены и отменённые записи не восстановятся."
             )
             await self.send(
@@ -1419,6 +1445,39 @@ class UI:
             await self.send(
                 "admin", uid, "Введите ответ модели одним сообщением (до 2000 символов)."
             )
+        elif action == "announcement":
+            self.pending[key] = ("announcement_text",)
+            await self.send(
+                "admin", uid,
+                "📣 Объявление всем\n\nПришлите текст объявления (до 3500 символов, без вложений). "
+                "Затем покажу предпросмотр и количество получателей.",
+                [[("История объявлений", "announcementhistory:0")], [("Отмена", "home")]],
+            )
+        elif action == "announcementconfirm":
+            state = self.pending.get(key, (None,))
+            if (
+                state[0] != "announcement_confirm" or state[1]["token"] != p[1]
+                or self.store.clock() - state[1]["issued"] > 300
+            ):
+                raise UserError("Подтверждение устарело. Создайте объявление заново.")
+            draft = state[1]
+            aid = self.store.announce(uid, draft["token"], draft["text"], draft["recipients"])
+            self.pending.pop(key, None)
+            await self.announcement_report(uid, aid)
+        elif action == "announcementreport":
+            await self.announcement_report(uid, int(p[1]))
+        elif action == "announcementhistory":
+            records = self.store.all("SELECT id,created FROM announcements ORDER BY id DESC")
+            page = min(max(0, int(p[1])), max(0, (len(records) - 1) // PAGE))
+            rows = [
+                [(f"Объявление · {self.when(r['created'])}", f"announcementreport:{r['id']}")]
+                for r in records[page * PAGE : (page + 1) * PAGE]
+            ]
+            await self.send(
+                "admin", uid, "📣 История объявлений" if records else "Объявлений пока нет.",
+                rows + [[("Новое объявление", "announcement")]]
+                + self.pages("announcementhistory", page, len(records)),
+            )
         elif action == "delivery":
             rows = self.store.all("SELECT state,count(*) n FROM outbox GROUP BY state")
             counts = {r["state"]: r["n"] for r in rows}
@@ -1430,3 +1489,25 @@ class UI:
             )
         else:
             raise UserError("Команда не найдена. Откройте /menu.")
+
+    async def announcement_report(self, uid, aid):
+        item = self.store.one("SELECT id,created FROM announcements WHERE id=?", (aid,))
+        if not item:
+            raise UserError("Объявление не найдено.")
+        counts = {
+            r["state"]: r["n"] for r in self.store.all(
+                "SELECT state,count(*) n FROM outbox WHERE announcement_id=? GROUP BY state", (aid,)
+            )
+        }
+        await self.send(
+            "admin", uid,
+            f"📣 Объявление · {self.when(item['created'])}\n\n"
+            f"Получателей: {sum(counts.values())}\n"
+            f"Отправлено: {counts.get('sent', 0)}\n"
+            f"В очереди: {counts.get('pending', 0) + counts.get('inflight', 0)}\n"
+            f"Ошибки: {counts.get('failed', 0)}\n"
+            f"Пропущено: {counts.get('cancelled', 0)}\n\n"
+            "Отправка идёт в фоне. Подтверждение Telegram не означает прочтение.",
+            [[("Обновить отчёт", f"announcementreport:{aid}")],
+             [("История объявлений", "announcementhistory:0"), ("Меню", "home")]],
+        )

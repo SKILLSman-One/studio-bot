@@ -9,7 +9,7 @@ import time
 
 import requests
 from aiogram import Bot
-from aiogram.exceptions import TelegramNetworkError
+from aiogram.exceptions import TelegramNetworkError, TelegramServerError, TelegramUnauthorizedError
 from dotenv import dotenv_values, set_key
 
 from . import __version__
@@ -36,6 +36,36 @@ def network_failure_types(error):
         result.append(type(error).__name__)
         error = error.__cause__ or error.__context__
     return " → ".join(result)
+
+
+async def telegram_startup_step(method, action):
+    delays = (2, 4, 8, 16, 32)
+    for attempt in range(len(delays) + 1):
+        try:
+            return await action()
+        except TelegramUnauthorizedError:
+            raise UserError(
+                f"Telegram отклонил авторизацию ({method}). Проверьте BOT_TOKEN в настройках хостинга."
+            ) from None
+        except (TelegramNetworkError, TelegramServerError) as error:
+            detail = network_failure_types(error)
+            if attempt == len(delays):
+                print(f"Telegram API · {method}: все попытки исчерпаны ({detail}).", flush=True)
+                raise
+            delay = delays[attempt]
+            print(
+                f"Telegram API · {method}: {detail}. Повтор через {delay} с.",
+                flush=True,
+            )
+            await asyncio.sleep(delay)
+
+
+async def prepare_telegram(bot):
+    # The dispatcher calls me() too; warm its cache so startup doesn't repeat getMe.
+    await telegram_startup_step("getMe", bot.me)
+    await telegram_startup_step(
+        "deleteWebhook", lambda: bot.delete_webhook(drop_pending_updates=False)
+    )
 
 
 def setup():
@@ -75,15 +105,15 @@ async def run(settings):
     ui = UI(settings, store, payroll, bots, auth)
     tasks = []
     try:
-        await bot.get_me()
-        await bot.delete_webhook(drop_pending_updates=False)
+        await prepare_telegram(bot)
         tasks = [
             asyncio.create_task(delivery_loop(store, bots)),
             asyncio.create_task(payroll_loop(payroll)),
             asyncio.create_task(heartbeat(settings.data)),
         ]
         print(
-            f"Бот {__version__} запущен. Вход администратора: /admin. Google-таблица обновляется раз в минуту и по кнопке."
+            f"Бот {__version__} запущен. Вход администратора: /admin. Google-таблица обновляется раз в минуту и по кнопке.",
+            flush=True,
         )
         poll = asyncio.create_task(
             ui.dispatcher.start_polling(
@@ -158,12 +188,15 @@ def main():
     except KeyboardInterrupt:
         print("Бот остановлен. Начатые смены сохранены и продолжат отображаться после запуска.")
         return 0
-    except TelegramNetworkError as error:
-        print(
-            "Нет соединения с Telegram API: " + network_failure_types(error) + ". "
-            "Проверьте исходящий HTTPS-доступ хостинга к api.telegram.org:443. "
-            "Адреса запросов и токен не выводятся."
-        )
+    except (TelegramNetworkError, TelegramServerError) as error:
+        if isinstance(error, TelegramServerError):
+            print("Telegram API или промежуточный шлюз вернул HTTP 5xx. Это ошибка запроса при работе бота.")
+        else:
+            print(
+                "Нет соединения с Telegram API: " + network_failure_types(error) + ". "
+                "Проверьте исходящий HTTPS-доступ хостинга к api.telegram.org:443. "
+                "Адреса запросов и токен не выводятся."
+            )
         try:
             response = requests.get("https://api.telegram.org", timeout=10)
             print(f"Проверка HTTPS к Telegram без токена: HTTP {response.status_code}.")

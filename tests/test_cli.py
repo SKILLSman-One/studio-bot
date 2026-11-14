@@ -3,10 +3,14 @@ import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, call
 
-from aiogram.exceptions import TelegramNetworkError
+import pytest
+from aiogram.exceptions import TelegramNetworkError, TelegramServerError, TelegramUnauthorizedError
 
-from studio_bot.__main__ import network_failure_types
+from studio_bot.__main__ import network_failure_types, prepare_telegram, telegram_startup_step
+from studio_bot.config import UserError
 
 
 def test_network_diagnostic_keeps_urls_and_credentials_private():
@@ -14,6 +18,48 @@ def test_network_diagnostic_keeps_urls_and_credentials_private():
     failure.__cause__ = TimeoutError("https://api.telegram.org/bot-secret-token/getMe")
     failure.__cause__.__context__ = failure
     assert network_failure_types(failure) == "TelegramNetworkError → TimeoutError"
+
+
+async def test_startup_recovers_from_temporary_errors_without_discarding_updates(monkeypatch, capsys):
+    secret = "https://api.telegram.org/bot-secret/getMe"
+    bot = SimpleNamespace(
+        me=AsyncMock(side_effect=[TelegramServerError(method=None, message=secret), object()]),
+        delete_webhook=AsyncMock(
+            side_effect=[TelegramNetworkError(method=None, message=secret), True]
+        ),
+    )
+    delay = AsyncMock()
+    monkeypatch.setattr("studio_bot.__main__.asyncio.sleep", delay)
+    await prepare_telegram(bot)
+    assert bot.me.await_count == 2
+    assert bot.delete_webhook.await_args_list == [call(drop_pending_updates=False)] * 2
+    assert delay.await_args_list == [call(2), call(2)]
+    out = capsys.readouterr().out
+    assert "getMe" in out and "deleteWebhook" in out and secret not in out
+
+
+async def test_startup_stops_after_six_server_errors(monkeypatch, capsys):
+    secret = "secret-response"
+    error = TelegramServerError(method=None, message=secret)
+    action = AsyncMock(side_effect=error)
+    delay = AsyncMock()
+    monkeypatch.setattr("studio_bot.__main__.asyncio.sleep", delay)
+    with pytest.raises(TelegramServerError):
+        await telegram_startup_step("getMe", action)
+    assert action.await_count == 6
+    assert delay.await_args_list == [call(s) for s in (2, 4, 8, 16, 32)]
+    result = capsys.readouterr().out
+    assert "все попытки исчерпаны" in result and secret not in result
+
+
+async def test_startup_does_not_retry_invalid_token():
+    action = AsyncMock(
+        side_effect=TelegramUnauthorizedError(method=None, message="private response")
+    )
+    with pytest.raises(UserError, match="BOT_TOKEN") as info:
+        await telegram_startup_step("getMe", action)
+    assert "private response" not in str(info.value)
+    action.assert_awaited_once()
 
 
 def test_uv_hosting_installs_the_same_runtime_dependencies_as_pip():

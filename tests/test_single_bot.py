@@ -198,7 +198,7 @@ async def test_runtime_polls_and_closes_exactly_one_bot(tmp_path, monkeypatch):
     from studio_bot import __main__ as main
 
     bot = SimpleNamespace(
-        get_me=AsyncMock(), delete_webhook=AsyncMock(), session=SimpleNamespace(close=AsyncMock())
+        me=AsyncMock(), delete_webhook=AsyncMock(), session=SimpleNamespace(close=AsyncMock())
     )
     bot_factory = Mock(return_value=bot)
     dispatcher = SimpleNamespace(
@@ -211,6 +211,8 @@ async def test_runtime_polls_and_closes_exactly_one_bot(tmp_path, monkeypatch):
     await main.run(settings)
     bot_factory.assert_called_once_with(settings.bot_token)
     assert dispatcher.start_polling.call_args.args == (bot,)
+    bot.me.assert_awaited_once()
+    bot.delete_webhook.assert_awaited_once_with(drop_pending_updates=False)
     bot.session.close.assert_awaited_once()
 
 

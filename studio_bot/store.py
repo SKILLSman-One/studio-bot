@@ -47,6 +47,7 @@ CREATE TABLE IF NOT EXISTS login_attempts(user_id INTEGER PRIMARY KEY, failures 
 CREATE TABLE IF NOT EXISTS admin_recipients(user_id INTEGER PRIMARY KEY, password_tag TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS admin_sessions(
  user_id INTEGER PRIMARY KEY, password_tag TEXT NOT NULL, expires_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS admin_members(user_id INTEGER PRIMARY KEY CHECK(user_id > 0));
 CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, actor INTEGER, action TEXT NOT NULL,
  target INTEGER, created REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS runtime_state(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -114,6 +115,7 @@ class Store:
                 "people",
                 "admin_recipients",
                 "admin_sessions",
+                "admin_members",
                 "login_attempts",
             ):
                 self.db.execute(f"DELETE FROM {table}")
@@ -121,6 +123,7 @@ class Store:
                 "UPDATE runtime_state SET value=? WHERE key='callback_epoch'",
                 (secrets.token_hex(4),),
             )
+            self.db.execute("DELETE FROM runtime_state WHERE key='admin_roster_frozen'")
 
     def one(self, sql, params=()):
         return self.db.execute(sql, params).fetchone()

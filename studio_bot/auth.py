@@ -30,10 +30,38 @@ class AdminAuth:
     def __init__(self, store, settings, clock=time.time):
         self.store, self.settings, self.clock = store, settings, clock
         self.login_lock = asyncio.Lock()
+        self._freeze_admin_roster()
+
+    def _freeze_admin_roster(self):
+        """Seed once from the successful logins already recorded by the previous release."""
+        key = "admin_roster_frozen"
+        with self.store.db:
+            self.store.db.execute("BEGIN IMMEDIATE")
+            if self.store.one("SELECT 1 FROM runtime_state WHERE key=?", (key,)):
+                return
+            rows = self.store.all("SELECT user_id,password_tag FROM admin_recipients")
+            candidates = (
+                [r["user_id"] for r in rows if r["password_tag"] == self.password_tag]
+                if rows
+                else self.settings.admin_ids
+            )
+            self.store.db.executemany(
+                "INSERT OR IGNORE INTO admin_members(user_id) VALUES (?)",
+                [
+                    (uid,) for uid in candidates
+                    if uid > 0 and self._config_allows(uid) and not self.store.is_banned(uid)
+                ],
+            )
+            self.store.db.execute("INSERT INTO runtime_state VALUES (?, '1')", (key,))
+
+    def _config_allows(self, uid):
+        return not self.settings.admin_ids or uid in self.settings.admin_ids
 
     def allowed(self, uid):
-        return not self.store.is_banned(uid) and (
-            not self.settings.admin_ids or uid in self.settings.admin_ids
+        return (
+            self._config_allows(uid)
+            and not self.store.is_banned(uid)
+            and self.store.one("SELECT 1 FROM admin_members WHERE user_id=?", (uid,)) is not None
         )
 
     def recipients(self):

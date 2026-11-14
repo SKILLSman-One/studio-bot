@@ -40,7 +40,13 @@ def people(store):
     return store
 
 
+def allow_admins(ui, *uids):
+    with ui.store.db:
+        ui.store.db.executemany("INSERT OR IGNORE INTO admin_members VALUES (?)", [(u,) for u in uids])
+
+
 def admin_session(ui, uid=99, *, seconds=3600):
+    allow_admins(ui, uid)
     with ui.store.db:
         ui.store.db.execute(
             "INSERT OR REPLACE INTO admin_sessions VALUES (?,?,?)",

@@ -46,10 +46,10 @@ def setup():
     token = (
         existing.get("BOT_TOKEN") or getpass.getpass("Токен единого бота (ввод скрыт): ").strip()
     )
-    ids = input("Telegram ID для ограничения админки (Enter — вход только по паролю): ").strip()
+    ids = input("Telegram ID администраторов через запятую: ").strip()
     if not re.fullmatch(r"\d+:[\w-]{30,}", token, flags=re.ASCII):
         raise UserError("Нужен корректный токен Telegram-бота.")
-    if ids and any(not x.strip().isdigit() or int(x.strip()) <= 0 for x in ids.split(",")):
+    if not ids or any(not x.strip().isdigit() or int(x.strip()) <= 0 for x in ids.split(",")):
         raise UserError("Укажите числовые ID администраторов, не username.")
     password = getpass.getpass("Придумайте пароль админки (от 12 символов): ")
     if password != getpass.getpass("Повторите пароль: "):

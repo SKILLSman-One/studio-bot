@@ -37,6 +37,8 @@ def test_verified_backup_reset_preserves_config_and_clears_every_record(tmp_path
         store.db.execute("INSERT INTO login_attempts VALUES (99,1,1,0)")
         store.db.execute("INSERT INTO admin_recipients VALUES (99,'test')")
         store.db.execute("INSERT INTO admin_sessions VALUES (99,'test',100)")
+        store.db.execute("INSERT INTO admin_members VALUES (99)")
+        store.db.execute("INSERT INTO runtime_state VALUES ('admin_roster_frozen','1')")
     epoch = store.callback_epoch
     store.close()
     reopened = Store(root / "data" / "studio.sqlite3")
@@ -67,10 +69,12 @@ def test_verified_backup_reset_preserves_config_and_clears_every_record(tmp_path
         "audit",
         "admin_recipients",
         "admin_sessions",
+        "admin_members",
         "login_attempts",
     ):
         assert clean.one(f"SELECT count(*) n FROM {table}")["n"] == 0
     assert clean.callback_epoch != epoch
+    assert not clean.one("SELECT 1 FROM runtime_state WHERE key='admin_roster_frozen'")
     clean.register(10, "Сотрудник", "", "")
     assert clean.user(10)["status"] == "pending"
     clean.close()

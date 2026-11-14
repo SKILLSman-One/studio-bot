@@ -1,8 +1,8 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
-from aiogram.methods import DeleteMessage, SendMessage
-from conftest import admin_session, click, message
+from aiogram.methods import AnswerCallbackQuery, DeleteMessage, SendMessage
+from conftest import admin_session, allow_admins, click, message
 
 from studio_bot.auth import SESSION_SECONDS, AdminAuth, hash_password
 from studio_bot.config import Settings
@@ -17,8 +17,9 @@ def sent_text(ui, uid):
     )
 
 
-async def test_password_only_login_default_and_notification_registration(ui):
+async def test_saved_admin_login_and_notification_registration(ui):
     ui.settings.admin_ids = ()
+    allow_admins(ui, 30)
     assert ui.bots["admin"] is ui.bots["model"]
     await message(ui, "/start", 30)
     assert "СТУДИЯ · АДМИНИСТРАТОР" not in sent_text(ui, 30)
@@ -61,6 +62,7 @@ async def test_admin_session_survives_restart_and_expires_after_a_week(ui, tmp_p
 
 async def test_admin_password_cannot_be_sent_as_model_contact(ui):
     ui.settings.admin_ids = ()
+    allow_admins(ui, 10)
     await click(ui, "contact", 10)
     assert ui.pending[("model", 10)][0] == "contact"
     await message(ui, "/admin", 10)
@@ -72,6 +74,7 @@ async def test_admin_password_cannot_be_sent_as_model_contact(ui):
 
 async def test_model_button_while_admin_only_shows_own_salary(ui):
     ui.settings.admin_ids = ()
+    allow_admins(ui, 10)
     assert await ui.auth.login(10, "correct-password")
     await click(ui, "salary:current", 10, "admin")
     assert "Мария" in sent_text(ui, 10)
@@ -90,6 +93,7 @@ async def test_expired_or_forged_admin_callback_cannot_mutate(ui):
     ui.store.start_shift(10, "4", ui.settings.rooms)
     await click(ui, "adminend:1", 20, "admin")
     assert len(ui.store.active_shifts()) == 1
+    allow_admins(ui, 20)
     assert await ui.auth.login(20, "correct-password")
     admin_session(ui, 20, seconds=-1)
     await click(ui, "adminend:1", 20, "admin")
@@ -98,6 +102,7 @@ async def test_expired_or_forged_admin_callback_cannot_mutate(ui):
 
 async def test_cancel_login_and_logout_return_to_model_menu(ui):
     ui.settings.admin_ids = ()
+    allow_admins(ui, 10)
     await message(ui, "/admin", 10)
     await message(ui, "/cancel", 10)
     assert ("admin", 10) not in ui.pending
@@ -112,12 +117,81 @@ async def test_cancel_login_and_logout_return_to_model_menu(ui):
 
 async def test_global_password_attempt_limit_persists(ui):
     ui.settings.admin_ids = ()
+    allow_admins(ui, 30, *range(100, 125))
     for uid in range(100, 125):
         assert not await ui.auth.login(uid, "incorrect")
     restored = AdminAuth(ui.store, ui.settings, clock=ui.store.clock)
     assert not await restored.login(30, "correct-password")
     restored.clock = lambda: ui.store.clock() + 901
     assert await restored.login(30, "correct-password")
+
+
+async def test_upgrade_freezes_known_admins_without_losing_existing_sessions(ui, tmp_path):
+    ui.settings.admin_ids = ()
+    tag = ui.auth.password_tag
+    with ui.store.db:
+        ui.store.db.execute("DELETE FROM admin_members")
+        ui.store.db.execute("DELETE FROM runtime_state WHERE key='admin_roster_frozen'")
+        ui.store.db.executemany(
+            "INSERT INTO admin_recipients VALUES (?,?)", [(10, tag), (20, tag), (30, "old")]
+        )
+        ui.store.db.execute(
+            "INSERT INTO admin_sessions VALUES (?,?,?)", (10, tag, ui.store.clock() + 300)
+        )
+    reopened = Store(tmp_path / "studio.sqlite3")
+    try:
+        auth = AdminAuth(reopened, ui.settings, clock=ui.store.clock)
+        ui.auth = auth
+        assert auth.logged_in(10)
+        assert auth.allowed(20) and not auth.logged_in(20)
+        assert await auth.login(20, "correct-password")
+        assert not await auth.login(30, "correct-password")
+        assert not await auth.login(40, "correct-password")
+        await message(ui, "/admin", 40)
+        await click(ui, "salary:current", 40, "admin")
+        assert ("admin", 40) not in ui.pending
+        assert any(
+            isinstance(c, AnswerCallbackQuery) and c.text == "Доступ закрыт."
+            for c in ui.bots["admin"].session.calls
+        )
+        ui.payroll.get.assert_not_called()
+        with reopened.db:
+            reopened.db.execute("INSERT INTO admin_recipients VALUES (?,?)", (40, tag))
+        restarted = AdminAuth(reopened, ui.settings, clock=ui.store.clock)
+        assert restarted.logged_in(10) and restarted.logged_in(20)
+        assert not restarted.allowed(40)
+        restarted.logout(20)
+        assert restarted.allowed(20) and not restarted.logged_in(20)
+        ui.settings.password_hash = hash_password("another-password")
+        assert not restarted.logged_in(10)
+        assert await restarted.login(10, "another-password")
+        assert not await restarted.login(40, "another-password")
+    finally:
+        reopened.close()
+
+
+async def test_empty_admin_list_fails_closed_without_telegram_ids(store, tmp_path):
+    settings = Settings(tmp_path, password_hash=hash_password("correct-password"))
+    auth = AdminAuth(store, settings, clock=store.clock)
+    assert not await auth.login(99, "correct-password")
+    assert not store.all("SELECT * FROM login_attempts")
+    with store.db:
+        store.db.execute("INSERT INTO admin_recipients VALUES (99,?)", (auth.password_tag,))
+    assert not AdminAuth(store, settings, clock=store.clock).allowed(99)
+
+
+def test_config_cannot_expand_frozen_roster_of_an_existing_installation(store, tmp_path):
+    settings = Settings(tmp_path, admin_ids=(10, 20), password_hash=hash_password("correct-password"))
+    import hashlib
+
+    tag = hashlib.sha256(settings.password_hash.encode()).hexdigest()
+    with store.db:
+        store.db.executemany(
+            "INSERT INTO admin_recipients VALUES (?,?)", [(10, tag), (30, tag)]
+        )
+    auth = AdminAuth(store, settings, clock=store.clock)
+    assert auth.allowed(10)
+    assert not auth.allowed(20) and not auth.allowed(30)
 
 
 async def test_runtime_polls_and_closes_exactly_one_bot(tmp_path, monkeypatch):

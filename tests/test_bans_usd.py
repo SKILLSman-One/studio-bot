@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from aiogram.methods import SendMessage
-from conftest import admin_session, click, message, texts
+from conftest import admin_session, allow_admins, click, message, texts
 
 from studio_bot.config import UserError
 from studio_bot.runtime import deliver_once
@@ -70,6 +70,7 @@ async def test_banned_old_buttons_cannot_read_or_mutate(ui, action):
 
 async def test_banned_account_cannot_reenter_admin_or_finish_input(ui):
     ui.settings.admin_ids = ()
+    allow_admins(ui, 10)
     assert await ui.auth.login(10, "correct-password")
     assert 10 in ui.auth.recipients()
     ui.pending[("model", 10)] = ("name",)

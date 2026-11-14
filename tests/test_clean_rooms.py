@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock
 
 from aiogram.exceptions import TelegramNetworkError
 from aiogram.methods import SendMediaGroup, SendMessage
-from conftest import click, texts
+from conftest import admin_session, click, texts
 
 from studio_bot.config import Settings
 from studio_bot.store import Store
@@ -83,7 +83,7 @@ async def test_clean_confirmation_expires_and_admin_can_end_without_attestation(
     ui.store.clock = lambda: stamp + 1801
     await click(ui, f"cleanconfirm:{token}")
     assert ui.store.active_shifts()
-    ui.auth.sessions[99] = ui.store.clock() + 3600
+    admin_session(ui)
     await click(ui, "adminend:1", 99, "admin")
     assert not ui.store.active_shifts()
     assert ui.store.one("SELECT clean_confirmed_at FROM shifts")[0] is None

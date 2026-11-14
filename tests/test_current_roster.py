@@ -1,7 +1,7 @@
 from datetime import date
 from decimal import Decimal
 
-from conftest import click, texts
+from conftest import admin_session, click, texts
 
 from studio_bot.payroll import Entry, Snapshot, report_csv, report_text
 
@@ -29,7 +29,7 @@ async def test_binding_uses_only_latest_month_and_rechecks_month_change(ui):
     with ui.store.db:
         ui.store.db.execute("UPDATE people SET payroll_id=NULL WHERE user_id=10")
     ui.store.register(30, "Новая", "", "")
-    ui.auth.sessions[99] = ui.store.clock() + 3600
+    admin_session(ui)
     await click(ui, "bindstart:30", 99, "admin")
     state = ui.pending[("admin", 99)][1]
     assert state["candidates"] == [("m10", "Аня")]

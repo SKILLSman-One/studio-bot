@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from aiogram.methods import SendMessage
-from conftest import click, message, texts
+from conftest import admin_session, click, message, texts
 
 from studio_bot.config import UserError
 from studio_bot.runtime import deliver_once
@@ -21,7 +21,7 @@ async def confirm_access(ui, target, choice):
 
 
 async def test_admin_ban_unban_preserves_profile_history_and_releases_resources(ui):
-    ui.auth.sessions[99] = ui.store.clock() + 3600
+    admin_session(ui)
     await click(ui, "room:0", 10)
     now = ui.store.clock()
     bid = ui.store.book(10, "2026-10-19", 0, now + 1000, now + 2000)
@@ -89,7 +89,7 @@ async def test_access_change_requires_admin_and_fresh_confirmation(ui):
     await click(ui, "accessask:20:ban", 99, "admin")
     await click(ui, "accessconfirm:forged", 99, "admin")
     assert not ui.store.is_banned(20)
-    ui.auth.sessions[99] = ui.store.clock() + 3600
+    admin_session(ui)
     await click(ui, "accessask:20:ban", 99, "admin")
     token = ui.pending[("admin", 99)][3]
     await click(ui, "person:20", 99, "admin")  # Cancel.
@@ -180,7 +180,7 @@ async def test_notifications_to_banned_users_are_cancelled_even_after_restart(pe
 
 
 async def test_all_menus_and_advance_views_use_only_usd(ui):
-    ui.auth.sessions[99] = ui.store.clock() + 3600
+    admin_session(ui)
     await message(ui, "/start", 30)
     await message(ui, "/start", 10)
     await click(ui, "home", 99, "admin")

@@ -5,7 +5,7 @@ from decimal import Decimal
 
 import pytest
 from aiogram.methods import SendDocument, SendMessage
-from conftest import click, message, texts
+from conftest import admin_session, click, message, texts
 
 from studio_bot.config import UserError
 from studio_bot.payroll import Entry, Snapshot, report_csv
@@ -13,7 +13,7 @@ from studio_bot.ui import UI
 
 
 async def test_admin_gross_and_model_share_usd_without_technical_details(ui):
-    ui.auth.sessions[99] = ui.store.clock() + 3600
+    admin_session(ui)
     await click(ui, "salary:current", 99, "admin")
     report = texts(ui, "admin")
     assert "Полный оборот" in report
@@ -77,7 +77,7 @@ async def test_large_admin_report_exports_gross_csv(ui):
         for i in range(80)
     )
     ui.payroll.get.return_value = Snapshot(entries, datetime.now(timezone.utc))
-    ui.auth.sessions[99] = ui.store.clock() + 3600
+    admin_session(ui)
     await click(ui, "salary:current", 99, "admin")
     documents = [x for x in ui.bots["admin"].session.calls if isinstance(x, SendDocument)]
     assert len(documents) == 1 and "Полный оборот" in documents[0].caption
@@ -108,7 +108,7 @@ async def test_rejected_model_can_contact_resubmit_and_get_approved(ui):
     assert person["note"] == "" and ("model", 30) not in ui.pending
     assert ui.store.one("SELECT count(*) n FROM people WHERE user_id=30")["n"] == 1
     assert ui.store.one("SELECT count(*) n FROM tickets WHERE user_id=30")["n"] == 1
-    ui.auth.sessions[99] = ui.store.clock() + 3600
+    admin_session(ui)
     await click(ui, "approveprofile:30", 99, "admin")
     await click(ui, "room:0", 30)
     assert ui.store.active_shifts()[0]["user_id"] == 30
@@ -117,7 +117,7 @@ async def test_rejected_model_can_contact_resubmit_and_get_approved(ui):
 async def test_admin_can_accept_rejected_without_resubmission(ui):
     ui.store.register(30, "Анкета", "", "")
     ui.store.reject_person(30, 99)
-    ui.auth.sessions[99] = ui.store.clock() + 3600
+    admin_session(ui)
     await click(ui, "person:30", 99, "admin")
     buttons = [
         b.callback_data.split(":", 2)[0] + ":" + b.callback_data.split(":", 2)[2]

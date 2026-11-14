@@ -2,10 +2,11 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 from aiogram.methods import DeleteMessage, SendMessage
-from conftest import click, message
+from conftest import admin_session, click, message
 
-from studio_bot.auth import AdminAuth, hash_password
+from studio_bot.auth import SESSION_SECONDS, AdminAuth, hash_password
 from studio_bot.config import Settings
+from studio_bot.store import Store
 
 
 def sent_text(ui, uid):
@@ -35,9 +36,27 @@ async def test_password_only_login_default_and_notification_registration(ui):
     await message(ui, "Комментарий", 40)
     assert ui.store.one("SELECT user_id FROM outbox WHERE role='admin'")["user_id"] == 30
     restored = AdminAuth(ui.store, ui.settings, clock=ui.store.clock)
-    assert restored.recipients() == (30,) and not restored.logged_in(30)
+    assert restored.recipients() == (30,) and restored.logged_in(30)
     ui.settings.password_hash = hash_password("another-password")
     assert restored.recipients() == ()
+    assert not restored.logged_in(30)
+
+
+async def test_admin_session_survives_restart_and_expires_after_a_week(ui, tmp_path):
+    assert await ui.auth.login(99, "correct-password")
+    now = ui.store.clock()
+    reopened = Store(tmp_path / "studio.sqlite3")
+    try:
+        restored = AdminAuth(reopened, ui.settings, clock=lambda: now + SESSION_SECONDS - 1)
+        assert restored.logged_in(99)
+        restored.clock = lambda: now + SESSION_SECONDS
+        assert not restored.logged_in(99)
+        restored.clock = lambda: now + 86400
+        restored.logout(99)
+        assert not ui.auth.logged_in(99)
+        assert restored.recipients() == (99,)
+    finally:
+        reopened.close()
 
 
 async def test_admin_password_cannot_be_sent_as_model_contact(ui):
@@ -72,7 +91,7 @@ async def test_expired_or_forged_admin_callback_cannot_mutate(ui):
     await click(ui, "adminend:1", 20, "admin")
     assert len(ui.store.active_shifts()) == 1
     assert await ui.auth.login(20, "correct-password")
-    ui.auth.sessions[20] = ui.store.clock() - 1
+    admin_session(ui, 20, seconds=-1)
     await click(ui, "adminend:1", 20, "admin")
     assert len(ui.store.active_shifts()) == 1
 

@@ -9,6 +9,8 @@ from zoneinfo import ZoneInfo
 
 from dotenv import dotenv_values
 
+from .presentation import REMOTE_ROOM
+
 ROOT = Path(os.environ.get("STUDIO_ROOT", Path(__file__).resolve().parent.parent))
 
 
@@ -92,6 +94,8 @@ class Settings:
             ):
                 raise ValueError()
             if any(not isinstance(x, str) or not 1 <= len(x) <= 40 for x in settings.rooms):
+                raise ValueError()
+            if REMOTE_ROOM in settings.rooms:
                 raise ValueError()
             if len(settings.slots) > 12:
                 raise ValueError()

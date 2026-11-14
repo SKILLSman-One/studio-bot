@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 
 from aiogram.methods import SendMessage
-from conftest import click
+from conftest import admin_session, click
 
 
 def add_booking(ui, uid, day, room="4", overnight=False, state="approved"):
@@ -50,7 +50,7 @@ async def test_model_schedule_is_private_and_overnight_date_is_not_repeated(ui):
 async def test_admin_selects_person_before_seeing_schedule_and_keeps_overview(ui):
     add_booking(ui, 10, 19, "10")
     add_booking(ui, 20, 20, "15")
-    ui.auth.sessions[99] = ui.store.clock() + 3600
+    admin_session(ui)
     await click(ui, "calendar", 99, "admin")
     chooser = last_message(ui, 99)
     assert chooser.text == "🗓 Чьё расписание хотим посмотреть?"
@@ -72,7 +72,7 @@ async def test_admin_calendar_pages_people_and_bookings_and_handles_empty_schedu
     with ui.store.db:
         ui.store.db.execute("UPDATE people SET banned=1 WHERE user_id=39")
     ui.store.register(40, "Неподтверждённая", "", "")
-    ui.auth.sessions[99] = ui.store.clock() + 3600
+    admin_session(ui)
     await click(ui, "calendar:0", 99, "admin")
     first = last_message(ui, 99)
     first_ids = {
@@ -112,7 +112,7 @@ async def test_calendar_callbacks_do_not_expose_another_model_schedule(ui):
     await click(ui, "calendarview:20:0", 10, "admin")
     sent = [call for call in ui.bots["model"].session.calls if isinstance(call, SendMessage)]
     assert not any("15-я комната" in call.text or "Мария" in call.text for call in sent)
-    ui.auth.sessions[99] = ui.store.clock() + 3600
+    admin_session(ui)
     with ui.store.db:
         ui.store.db.execute("UPDATE people SET banned=1 WHERE user_id=20")
     await click(ui, "calendarview:20:0", 99, "admin")

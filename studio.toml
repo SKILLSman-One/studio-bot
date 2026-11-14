@@ -45,6 +45,19 @@ placeholder_names = ["Работающие модели"]
 totals_include_next_month_day = true
 inactive_names = ["Катя Erica", "Вика Kim", "Милана Anna", "Настя Eva", "Саша Sara"]
 
+# November structure checked on 2026-11-14. Enable after confirming the intended
+# payroll workbook and granting the bot's service account Reader access.
+# November's totals include the December 1 column, as in the September workbook.
+# [[payroll_sources]]
+# format = "studio_daily_share"
+# calculation_confirmed = true
+# spreadsheet_id = "12IQKcodBgf7JK7WsqGzB9Knz8TXHKL3SkG2MwTpwHRw"
+# month = "2026-11"
+# range = "'Чеки'!H1:AR"
+# shares_range = "'Модели'!G1:J"
+# placeholder_names = ["Работающие модели"]
+# totals_include_next_month_day = true
+
 [room_photos]
 "4" = ["assets/rooms/4-1.png", "assets/rooms/4-2.png"]
 "8" = ["assets/rooms/8-1.png", "assets/rooms/8-2.png"]

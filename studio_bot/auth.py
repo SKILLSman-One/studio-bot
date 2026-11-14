@@ -4,6 +4,8 @@ import hmac
 import secrets
 import time
 
+SESSION_SECONDS = 7 * 24 * 60 * 60
+
 
 def hash_password(password: str):
     if not 12 <= len(password) <= 512:
@@ -27,7 +29,6 @@ def verify_password(password, encoded):
 class AdminAuth:
     def __init__(self, store, settings, clock=time.time):
         self.store, self.settings, self.clock = store, settings, clock
-        self.sessions = {}
         self.login_lock = asyncio.Lock()
 
     def allowed(self, uid):
@@ -49,7 +50,10 @@ class AdminAuth:
         return hashlib.sha256(self.settings.password_hash.encode()).hexdigest()
 
     def logged_in(self, uid):
-        return self.allowed(uid) and self.sessions.get(uid, 0) > self.clock()
+        return self.allowed(uid) and self.store.one(
+            "SELECT 1 FROM admin_sessions WHERE user_id=? AND password_tag=? AND expires_at>?",
+            (uid, self.password_tag, self.clock()),
+        ) is not None
 
     async def login(self, uid, password):
         async with self.login_lock:
@@ -73,7 +77,10 @@ class AdminAuth:
         with self.store.db:
             if success:
                 self.store.db.execute("DELETE FROM login_attempts WHERE user_id=?", (uid,))
-                self.sessions[uid] = self.clock() + 3600
+                self.store.db.execute(
+                    "INSERT OR REPLACE INTO admin_sessions VALUES (?,?,?)",
+                    (uid, self.password_tag, self.clock() + SESSION_SECONDS),
+                )
                 self.store.db.execute(
                     "INSERT OR REPLACE INTO admin_recipients VALUES (?,?)", (uid, self.password_tag)
                 )
@@ -97,4 +104,5 @@ class AdminAuth:
         return success
 
     def logout(self, uid):
-        self.sessions.pop(uid, None)
+        with self.store.db:
+            self.store.db.execute("DELETE FROM admin_sessions WHERE user_id=?", (uid,))

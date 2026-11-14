@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 import pytest
 from aiogram.methods import SendMessage
-from conftest import click, texts
+from conftest import admin_session, click, texts
 
 from studio_bot import __version__
 from studio_bot.config import UserError
@@ -25,7 +25,7 @@ def buttons(ui, uid=99):
 
 
 def admin(ui, uid=99):
-    ui.auth.sessions[uid] = ui.store.clock() + 3600
+    admin_session(ui, uid)
 
 
 def free_anna(ui):

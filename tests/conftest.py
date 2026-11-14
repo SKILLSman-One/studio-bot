@@ -40,6 +40,14 @@ def people(store):
     return store
 
 
+def admin_session(ui, uid=99, *, seconds=3600):
+    with ui.store.db:
+        ui.store.db.execute(
+            "INSERT OR REPLACE INTO admin_sessions VALUES (?,?,?)",
+            (uid, ui.auth.password_tag, ui.store.clock() + seconds),
+        )
+
+
 class RecordingSession(BaseSession):
     def __init__(self):
         super().__init__()

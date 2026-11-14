@@ -36,6 +36,7 @@ def test_verified_backup_reset_preserves_config_and_clears_every_record(tmp_path
     with store.db:
         store.db.execute("INSERT INTO login_attempts VALUES (99,1,1,0)")
         store.db.execute("INSERT INTO admin_recipients VALUES (99,'test')")
+        store.db.execute("INSERT INTO admin_sessions VALUES (99,'test',100)")
     epoch = store.callback_epoch
     store.close()
     reopened = Store(root / "data" / "studio.sqlite3")
@@ -65,6 +66,7 @@ def test_verified_backup_reset_preserves_config_and_clears_every_record(tmp_path
         "outbox",
         "audit",
         "admin_recipients",
+        "admin_sessions",
         "login_attempts",
     ):
         assert clean.one(f"SELECT count(*) n FROM {table}")["n"] == 0

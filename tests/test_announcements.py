@@ -2,7 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from conftest import click, message, texts
+from conftest import admin_session, click, message, texts
 
 from studio_bot.config import UserError
 from studio_bot.runtime import deliver_once
@@ -10,7 +10,7 @@ from studio_bot.store import Store
 
 
 def admin(ui):
-    ui.auth.sessions[99] = ui.store.clock() + 3600
+    admin_session(ui)
 
 
 async def preview(ui, text="🗓 Заполните расписание\n\nДо пятницы ♡"):

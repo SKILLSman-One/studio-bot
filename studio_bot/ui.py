@@ -32,7 +32,7 @@ from .dates import (
     visit_times,
 )
 from .payroll import amount_input, money, report_csv, report_text
-from .presentation import button_label, room_name
+from .presentation import REMOTE_ROOM, button_label, location_label, room_name
 
 PAGE = 8
 LABELS = {
@@ -168,7 +168,7 @@ class UI:
                 uid,
                 "🪄 СТУДИЯ · АДМИНИСТРАТОР\n\nВсё под рукой ♡\nСанкт-Петербург · выберите раздел",
                 [
-                    [("Сейчас в студии", "rooms"), ("Использование комнат", "usage")],
+                    [("Смены и комнаты", "rooms"), ("Использование комнат", "usage")],
                     [("Анкеты и модели", "people:0")],
                     [
                         ("Заблокировать", "accesslist:ban:0"),
@@ -219,7 +219,7 @@ class UI:
         await self.send(
             "admin",
             uid,
-            "Введите пароль администратора отдельным сообщением. Сообщение будет удалено по возможности; вход действует 1 час. /cancel — отмена.",
+            "Введите пароль администратора отдельным сообщением. Сообщение будет удалено по возможности; вход действует 7 дней. /cancel — отмена.",
         )
 
     async def on_message(self, message, role):
@@ -307,12 +307,13 @@ class UI:
                 await self.send(
                     "admin",
                     uid,
-                    f"📅 Новое время: {self.when(start)} — {self.when(end)}\nВыберите комнату, чтобы подтвердить запись:",
+                    f"📅 Новое время: {self.when(start)} — {self.when(end)}\nВыберите комнату или «Дистанционно»:",
                     [
                         [(room_name(room), f"bookedit:{data['token']}:{i}")]
                         for i, room in enumerate(self.settings.rooms)
                     ]
-                    + [[("Отмена", "bookings:0")]],
+                    + [[("💻 Дистанционно", f"bookedit:{data['token']}:remote")],
+                       [("Отмена", "bookings:0")]],
                 )
             elif state[0] == "period":
                 await self.salary(role, uid, parse_period(text))
@@ -465,10 +466,11 @@ class UI:
             await self.admin_action(uid, p)
 
     async def rooms(self, role, uid):
-        active = {row["room"]: row for row in self.store.active_shifts()}
+        shifts = self.store.active_shifts()
+        active = {row["room"]: row for row in shifts if row["room"] != REMOTE_ROOM}
         lines = [f"🚪 Комнаты студии · {self.now():%d.%m %H:%M}", ""]
         rows = []
-        mine = next((s for s in active.values() if s["user_id"] == uid), None)
+        mine = next((s for s in shifts if s["user_id"] == uid), None)
         for index, room in enumerate(self.settings.rooms):
             row = active.get(room)
             if row:
@@ -493,8 +495,21 @@ class UI:
                     and (not reservation or reservation["user_id"] == uid)
                 ):
                     rows.append([(f"Начать смену — {room_name(room)}", f"room:{index}")])
-        if mine and role == "model":
+        if role == "admin":
+            remote = [row for row in shifts if row["room"] == REMOTE_ROOM]
+            if remote:
+                lines.extend(("", "💻 Дистанционные смены"))
+            for row in remote:
+                lines.append(
+                    f"• {row['name']} · {duration(self.store.clock() - row['started'])} · с {self.when(row['started'])}"
+                )
+                rows.append([(f"Завершить смену · {row['name']}", f"askend:{row['id']}")])
+        elif mine:
+            if mine["room"] == REMOTE_ROOM:
+                lines.extend(("", f"💻 Твоя дистанционная смена · с {self.when(mine['started'])}"))
             rows.append([("Завершить мою смену", f"end:{mine['id']}")])
+        else:
+            rows.append([("Начать смену — дистанционно", "remote")])
         lines += [
             "",
             "Занятость отмечается началом/концом смены в боте. Бронь сама смену не запускает.",
@@ -559,6 +574,9 @@ class UI:
         if action == "room":
             self.store.start_shift(uid, self.settings.rooms[int(p[1])], self.settings.rooms)
             await self.rooms("model", uid)
+        elif action == "remote":
+            self.store.start_shift(uid, REMOTE_ROOM, self.settings.rooms)
+            await self.rooms("model", uid)
         elif action == "end":
             await self.clean_room_prompt(uid, int(p[1]))
         elif action == "cleanconfirm":
@@ -586,7 +604,7 @@ class UI:
             await self.send(
                 "model",
                 uid,
-                "🗓 Запись на следующую неделю ♡\nВыбери день, напиши время начала и конца, затем выбери комнату. Свободная комната бронируется сразу.\nВремя Санкт-Петербурга. Запись открыта только в четверг и пятницу.",
+                "🗓 Запись на следующую неделю ♡\nВыбери день, напиши время начала и конца, затем выбери комнату или «Дистанционно».\nВремя Санкт-Петербурга. Запись открыта только в четверг и пятницу.",
                 [[(f"{d:%d.%m} · {weekdays[d.weekday()]}", f"day:{d}")] for d in days]
                 + [[("Мои записи", "mybookings:0"), ("Меню", "home")]],
             )
@@ -601,13 +619,25 @@ class UI:
             )
         elif action == "slot":
             raise UserError("Теперь выбираем комнату и своё время ♡ Откройте запись заново.")
-        elif action == "bookroom":
+        elif action in {"bookroom", "bookremote"}:
             data = self.visit_state(uid, "visit_room", p[1])
-            index = int(p[2])
-            if not 0 <= index < len(self.settings.rooms):
-                raise UserError("Комната не найдена.")
-            data = dict(data, room=self.settings.rooms[index], token=secrets.token_hex(4))
+            room = REMOTE_ROOM
+            if action == "bookroom":
+                index = int(p[2])
+                if not 0 <= index < len(self.settings.rooms):
+                    raise UserError("Комната не найдена.")
+                room = self.settings.rooms[index]
+            data = dict(data, room=room, token=secrets.token_hex(4))
             self.pending[key] = ("visit_confirm", data)
+            if room == REMOTE_ROOM:
+                await self.send(
+                    "model",
+                    uid,
+                    self.visit_period(data["start"], data["end"])
+                    + "\n💻 Дистанционно\n\nПодтвердить запись?",
+                    [[("Подтвердить запись", f"bookconfirm:{data['token']}")], [("Отмена", "home")]],
+                )
+                return
             conflict = bool(self.store.room_conflicts(data["room"], data["start"], data["end"]))
             detail = (
                 "⚠️ На это время есть бронь. Отправить запрос администратору? До его решения комната не закрепляется."
@@ -647,11 +677,13 @@ class UI:
                 (
                     "⚠️ Время пересекается с другой записью. Администратору отправлено уведомление; комната пока не забронирована."
                     if state == "conflict"
+                    else "✅ Дистанционная запись сохранена ♡"
+                    if data["room"] == REMOTE_ROOM
                     else "✅ Комната за тобой, UwU ♡"
                 )
                 + "\n\n"
                 + self.visit_period(data["start"], data["end"])
-                + f"\n🚪 {room_name(data['room'])}",
+                + f"\n{location_label(data['room'])}",
                 [[("Мои записи", "mybookings:0"), ("Добавить ещё", "week")]],
             )
         elif action == "mybookings":
@@ -730,6 +762,15 @@ class UI:
         )
         if not shift:
             raise UserError("Смена не найдена или уже завершена.")
+        if shift["room"] == REMOTE_ROOM:
+            length = self.store.end_shift(sid, uid)
+            await self.send(
+                "model",
+                uid,
+                f"🌙 Дистанционная смена завершена. Продолжительность: {duration(length)}.",
+                [[("Меню", "home")]],
+            )
+            return
         paths = self.settings.photos(shift["room"])
         if paths:
             try:
@@ -798,10 +839,11 @@ class UI:
         await self.send(
             "model",
             uid,
-            "🚪 Выбери комнату ♡\n\n"
+            "Выбери комнату или «Дистанционно» ♡\n\n"
             + self.visit_period(data["start"], data["end"])
             + "\n\n🟢 Свободна\n🟡 Есть пересечение — на разбор администратору",
-            rows + [[("Другой день", "week"), ("Отмена", "home")]],
+            rows + [[("Дистанционно", f"bookremote:{data['token']}")]]
+            + [[("Другой день", "week"), ("Отмена", "home")]],
         )
 
     @staticmethod
@@ -1015,8 +1057,7 @@ class UI:
         lines = self.visit_period(row["started"], row["ended"]).splitlines()
         if include_name:
             lines[0] += f" · {row['name']}"
-        room = room_name(row["room"]) if row["room"] else "комната не назначена"
-        lines.append(f"🚪 {room}")
+        lines.append(location_label(row["room"]) if row["room"] else "🚪 комната не назначена")
         if row["state"] != "approved":
             lines.append(LABELS[row["state"]])
         return "\n".join(lines)
@@ -1115,8 +1156,8 @@ class UI:
         lines = [f"Использование комнат • {period[0]} — {period[1]}"]
         lines += [f"{room}: {duration(totals.get(room, 0))}" for room in self.settings.rooms]
         recent = self.store.all(
-            "SELECT s.*,p.name FROM shifts s JOIN people p USING(user_id) WHERE started<? AND (ended IS NULL OR ended>?) ORDER BY started DESC LIMIT 20",
-            (end, start),
+            "SELECT s.*,p.name FROM shifts s JOIN people p USING(user_id) WHERE room<>? AND started<? AND (ended IS NULL OR ended>?) ORDER BY started DESC LIMIT 20",
+            (REMOTE_ROOM, end, start),
         )
         lines += ["", "Последние 20 смен периода:"]
         for row in recent:
@@ -1139,10 +1180,14 @@ class UI:
             await self.send("model", uid, "Вы вышли из админки. /admin — войти снова.")
             await self.home("model", uid)
         elif action == "askend":
+            shift = self.store.one("SELECT room FROM shifts WHERE id=? AND ended IS NULL", (int(p[1]),))
+            if not shift:
+                raise UserError("Смена не найдена или уже завершена.")
             await self.send(
                 "admin",
                 uid,
-                "Завершить эту смену и освободить комнату?",
+                "Завершить дистанционную смену?"
+                if shift["room"] == REMOTE_ROOM else "Завершить эту смену и освободить комнату?",
                 [[("Да, завершить", f"adminend:{int(p[1])}"), ("Назад", "rooms")]],
             )
         elif action == "adminend":
@@ -1295,12 +1340,13 @@ class UI:
                 uid,
                 f"📅 {row['name']}\n{self.when(row['started'])} — {self.when(row['ended'])}\nЗапрошена: {room_name(row['room']) if row['room'] else 'не выбрана'}\n"
                 + (f"\nПересечения в этой комнате:\n{detail}\n" if detail else "")
-                + "\nВыберите свободную комнату для подтверждения или измените время:",
+                + "\nВыберите свободную комнату, «Дистанционно» или измените время:",
                 [
                     [(room_name(room), f"approvebook:{row['id']}:{i}")]
                     for i, room in enumerate(self.settings.rooms)
                 ]
                 + [
+                    [("💻 Дистанционно", f"approvebook:{row['id']}:remote")],
                     [("Изменить время", f"booktime:{row['id']}")],
                     [("Отклонить", f"rejectbook:{row['id']}"), ("Назад", "bookings:0")],
                 ],
@@ -1317,7 +1363,7 @@ class UI:
             await self.send(
                 "admin",
                 uid,
-                f"Новое время на {row['day']}: например 14:00–19:30. Затем выберите комнату для подтверждения. /cancel — отмена.",
+                f"Новое время на {row['day']}: например 14:00–19:30. Затем выберите комнату или «Дистанционно». /cancel — отмена.",
             )
         elif action == "bookedit":
             state = self.pending.get(key, (None,))
@@ -1328,21 +1374,16 @@ class UI:
             ):
                 raise UserError("Выбор устарел. Откройте заявку заново.")
             data = state[1]
-            index = int(p[2])
-            if not 0 <= index < len(self.settings.rooms):
-                raise UserError("Комната не найдена.")
             self.store.decide_booking(
                 data["bid"],
                 uid,
-                room=self.settings.rooms[index],
+                room=self.booking_location(p[2]),
                 times=(data["start"], data["end"]),
             )
             self.pending.pop(key, None)
             await self.list_bookings("admin", uid, 0)
         elif action in {"approvebook", "rejectbook"}:
-            if action == "approvebook" and not 0 <= int(p[2]) < len(self.settings.rooms):
-                raise UserError("Комната не найдена.")
-            room = self.settings.rooms[int(p[2])] if action == "approvebook" else None
+            room = self.booking_location(p[2]) if action == "approvebook" else None
             self.store.decide_booking(int(p[1]), uid, room=room, reject=action == "rejectbook")
             await self.list_bookings("admin", uid, 0)
         elif action == "calendar":
@@ -1489,6 +1530,14 @@ class UI:
             )
         else:
             raise UserError("Команда не найдена. Откройте /menu.")
+
+    def booking_location(self, value):
+        if value == "remote":
+            return REMOTE_ROOM
+        index = int(value)
+        if not 0 <= index < len(self.settings.rooms):
+            raise UserError("Комната не найдена.")
+        return self.settings.rooms[index]
 
     async def announcement_report(self, uid, aid):
         item = self.store.one("SELECT id,created FROM announcements WHERE id=?", (aid,))

@@ -1,8 +1,16 @@
 """Shared labels for the studio's friendly Telegram interface."""
 
+REMOTE_ROOM = "__remote__"
+
 
 def room_name(room):
+    if room == REMOTE_ROOM:
+        return "Дистанционно"
     return f"{room}-я комната" if str(room).isdigit() else str(room)
+
+
+def location_label(room):
+    return f"{'💻' if room == REMOTE_ROOM else '🚪'} {room_name(room)}"
 
 
 def button_label(label, action):
@@ -13,6 +21,8 @@ def button_label(label, action):
         "home": "🏡",
         "rooms": "🚪",
         "room": "✨",
+        "remote": "💻",
+        "bookremote": "💻",
         "end": "🌙",
         "week": "🗓",
         "day": "📅",

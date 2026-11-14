@@ -11,9 +11,9 @@ from zoneinfo import ZoneInfo
 
 from .config import UserError
 from .dates import payment_dates, require_booking_window
-from .presentation import room_name
+from .presentation import REMOTE_ROOM, location_label, room_name
 
-SCHEMA = """
+SCHEMA = f"""
 PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS people(
  user_id INTEGER PRIMARY KEY, name TEXT NOT NULL, username TEXT NOT NULL, note TEXT NOT NULL,
@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS people(
 CREATE TABLE IF NOT EXISTS shifts(
  id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES people, room TEXT NOT NULL,
  started REAL NOT NULL, ended REAL, ended_by INTEGER);
-CREATE UNIQUE INDEX IF NOT EXISTS occupied_room ON shifts(room) WHERE ended IS NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS occupied_studio_room ON shifts(room)
+ WHERE ended IS NULL AND room <> '{REMOTE_ROOM}';
 CREATE UNIQUE INDEX IF NOT EXISTS one_shift ON shifts(user_id) WHERE ended IS NULL;
 CREATE TABLE IF NOT EXISTS bookings(
  id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES people, day TEXT NOT NULL,
@@ -44,6 +45,8 @@ CREATE TABLE IF NOT EXISTS outbox(
 CREATE TABLE IF NOT EXISTS login_attempts(user_id INTEGER PRIMARY KEY, failures INTEGER NOT NULL,
  last_attempt REAL NOT NULL, blocked_until REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS admin_recipients(user_id INTEGER PRIMARY KEY, password_tag TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS admin_sessions(
+ user_id INTEGER PRIMARY KEY, password_tag TEXT NOT NULL, expires_at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS audit(id INTEGER PRIMARY KEY, actor INTEGER, action TEXT NOT NULL,
  target INTEGER, created REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS runtime_state(key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -66,6 +69,7 @@ class Store:
                 self.db.execute("ALTER TABLE people ADD COLUMN banned INTEGER NOT NULL DEFAULT 0")
         self.clock = clock
         with self.db:
+            self.db.execute("DROP INDEX IF EXISTS occupied_room")
             if "clean_confirmed_at" not in {
                 r["name"] for r in self.db.execute("PRAGMA table_info(shifts)")
             }:
@@ -109,6 +113,7 @@ class Store:
                 "shifts",
                 "people",
                 "admin_recipients",
+                "admin_sessions",
                 "login_attempts",
             ):
                 self.db.execute(f"DELETE FROM {table}")
@@ -164,6 +169,7 @@ class Store:
                     (actor, uid, self.clock()),
                 )
                 self.db.execute("DELETE FROM admin_recipients WHERE user_id=?", (uid,))
+                self.db.execute("DELETE FROM admin_sessions WHERE user_id=?", (uid,))
                 self.db.execute(
                     "UPDATE outbox SET state='cancelled' WHERE user_id=? AND state='pending'",
                     (uid,),
@@ -286,12 +292,12 @@ class Store:
 
     def start_shift(self, uid, room, rooms):
         self.approved(uid)
-        if room not in rooms:
+        if room != REMOTE_ROOM and room not in rooms:
             raise UserError("Комната не найдена. Обновите меню.")
         now = self.clock()
         try:
             with self.db:
-                booked = self.one(
+                booked = room != REMOTE_ROOM and self.one(
                     "SELECT 1 FROM bookings WHERE state='approved' AND room=? AND user_id<>? AND started<=? AND ended>?",
                     (room, uid, now, now),
                 )
@@ -304,10 +310,12 @@ class Store:
                 self.enqueue(
                     "model",
                     uid,
-                    f"🌸 Твоя смена началась!\n🚪 {room_name(room)}\nХорошей смены, UwU ♡",
+                    f"🌸 Твоя смена началась!\n{location_label(room)}\nХорошей смены, UwU ♡",
                 )
                 return result.lastrowid
         except sqlite3.IntegrityError:
+            if room == REMOTE_ROOM:
+                raise UserError("У вас уже есть незавершённая смена.") from None
             raise UserError("Комната уже занята или у вас есть незавершённая смена.") from None
 
     def end_shift(self, sid, actor, admin=False, clean_confirmed=False):
@@ -315,9 +323,11 @@ class Store:
             shift = self.one("SELECT * FROM shifts WHERE id=?", (sid,))
             if not shift or shift["ended"] is not None or (not admin and shift["user_id"] != actor):
                 raise UserError("Смена не найдена или уже завершена.")
+            if not admin:
+                self.approved(actor)
             ended = max(self.clock(), shift["started"])
             self.db.execute("UPDATE shifts SET ended=?,ended_by=? WHERE id=?", (ended, actor, sid))
-            if clean_confirmed and not admin:
+            if clean_confirmed and not admin and shift["room"] != REMOTE_ROOM:
                 self.db.execute("UPDATE shifts SET clean_confirmed_at=? WHERE id=?", (ended, sid))
                 self.audit(actor, "confirm_room_clean", sid)
             self.audit(actor, "end_shift", sid)
@@ -327,8 +337,9 @@ class Store:
 
     def room_usage(self, start, end):
         rows = self.all(
-            "SELECT room,started,ended FROM shifts WHERE started<? AND (ended IS NULL OR ended>?)",
-            (end, start),
+            "SELECT room,started,ended FROM shifts "
+            "WHERE room<>? AND started<? AND (ended IS NULL OR ended>?)",
+            (REMOTE_ROOM, end, start),
         )
         result = {}
         for row in rows:
@@ -358,6 +369,8 @@ class Store:
             raise UserError("Слот уже выбран.") from None
 
     def room_conflicts(self, room, started, ended):
+        if room == REMOTE_ROOM:
+            return []
         return self.all(
             "SELECT b.*,p.name FROM bookings b JOIN people p USING(user_id) "
             "WHERE state='approved' AND room=? AND started<? AND ended>? ORDER BY started",
@@ -372,7 +385,7 @@ class Store:
             now = datetime.fromtimestamp(self.clock(), settings.zone)
             require_booking_window(now, date.fromisoformat(day))
             if (
-                room not in settings.rooms
+                (room != REMOTE_ROOM and room not in settings.rooms)
                 or started <= self.clock()
                 or ended <= started
                 or ended - started > 24 * 3600

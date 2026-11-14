@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from aiogram.methods import SendMessage
-from conftest import click, message, texts
+from conftest import admin_session, click, message, texts
 
 from studio_bot.config import Settings, UserError
 from studio_bot.dates import payment_dates, payment_period, require_booking_window, visit_times
@@ -233,7 +233,7 @@ async def test_salary_payday_deducts_only_own_advance_and_preserves_admin_gross(
     assert "16.09.2026 — 30.09.2026" in texts(ui)
     assert "К получению: $150.00" in texts(ui)
     assert "Мария" not in texts(ui)
-    ui.auth.sessions[99] = ui.store.clock() + 3600
+    admin_session(ui)
     await click(ui, "payday:2026-10-20", 99, "admin")
     assert "400.00" in texts(ui, "admin") and "К получению" not in texts(ui, "admin")
     ui.store.decide_advance(aid, "paid", 99)
@@ -260,7 +260,7 @@ async def test_inactive_aliases_do_not_block_other_models_or_offer_binding(ui):
     await click(ui, "payday:2026-10-20")
     assert "К получению: $200.00" in texts(ui)
     ui.store.register(30, "Новая", "", "")
-    ui.auth.sessions[99] = ui.store.clock() + 3600
+    admin_session(ui)
     await click(ui, "bindstart:30", 99, "admin")
     assert not ui.pending[("admin", 99)][1]["candidates"]
     await click(ui, "payday:2026-10-20", 99, "admin")

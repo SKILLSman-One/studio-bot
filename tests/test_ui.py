@@ -3,7 +3,7 @@ from datetime import date
 
 import pytest
 from aiogram.methods import SendDocument, SendMessage
-from conftest import click, message, texts
+from conftest import admin_session, click, message, texts
 
 from studio_bot.auth import AdminAuth
 from studio_bot.config import UserError
@@ -14,7 +14,7 @@ async def test_binding_exact_alias_requires_confirmation(ui):
     ui.store.register(30, "Новая анкета", "", "")
     with ui.store.db:
         ui.store.db.execute("UPDATE people SET payroll_id=NULL WHERE user_id=10")
-    ui.auth.sessions[99] = ui.store.clock() + 3600
+    admin_session(ui)
     await click(ui, "bindstart:30", 99, "admin")
     state = ui.pending[("admin", 99)][1]
     await click(ui, f"bindpick:{state['token']}:0", 99, "admin")
@@ -56,7 +56,7 @@ async def test_allowlisted_admin_needs_password_and_session_expires(ui):
     assert ui.auth.logged_in(99)
     await click(ui, "salary:current", 99, "admin")
     assert "Мария" in texts(ui, "admin") and "251.00" in texts(ui, "admin")
-    ui.auth.sessions[99] = ui.store.clock() - 1
+    admin_session(ui, seconds=-1)
     ui.payroll.get.reset_mock()
     await click(ui, "salary:current", 99, "admin")
     ui.payroll.get.assert_not_called()
@@ -91,7 +91,7 @@ async def test_form_admin_binding_confirm_and_replay(ui):
     assert ui.store.user(30)["note"] == ""
     assert ("model", 30) not in ui.pending
     assert "опыт" not in texts(ui).lower() and "комментарий" not in texts(ui).lower()
-    ui.auth.sessions[99] = ui.store.clock() + 3600
+    admin_session(ui)
     await click(ui, "person:30", 99, "admin")
     await click(ui, "bindstart:30", 99, "admin")
     assert not ui.pending[("admin", 99)][1]["candidates"]
@@ -103,7 +103,7 @@ async def test_form_admin_binding_confirm_and_replay(ui):
 
 
 async def test_full_shift_booking_advance_and_admin_reply(ui):
-    ui.auth.sessions[99] = ui.store.clock() + 3600
+    admin_session(ui)
     await click(ui, "room:0")
     await click(ui, "rooms", 99, "admin")
     assert "Аня" in texts(ui, "admin")
@@ -160,7 +160,7 @@ async def test_unavailable_table_blocks_advance_not_other_features(ui):
 
 
 async def test_admin_logout_invalidates_old_buttons(ui):
-    ui.auth.sessions[99] = ui.store.clock() + 3600
+    admin_session(ui)
     await click(ui, "logout", 99, "admin")
     await click(ui, "salary:current", 99, "admin")
     ui.payroll.get.assert_not_called()
@@ -168,7 +168,7 @@ async def test_admin_logout_invalidates_old_buttons(ui):
 
 async def test_profile_without_salary_binding_has_rooms_but_cannot_read_any_payroll(ui):
     ui.store.register(30, "Ольга", "", "")
-    ui.auth.sessions[99] = ui.store.clock() + 3600
+    admin_session(ui)
     await click(ui, "approveprofile:30", 99, "admin")
     await click(ui, "room:0", 30)
     assert ui.store.active_shifts()[0]["user_id"] == 30

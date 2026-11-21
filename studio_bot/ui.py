@@ -1015,6 +1015,10 @@ class UI:
         try:
             snapshot = await self.payroll.get(force=True)
             google = "подключена, проверка успешна"
+            if snapshot.issues:
+                google = "часть месяцев недоступна\n" + "\n".join(
+                    issue.message for issue in snapshot.issues
+                )
         except UserError as error:
             google = "ошибка: " + str(error)
         except Exception:

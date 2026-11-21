@@ -1,4 +1,4 @@
-"""Reader for the verified October studio workbook; never modifies Google Sheets."""
+"""Reader for verified monthly studio workbooks; never modifies Google Sheets."""
 
 import calendar
 import hashlib
@@ -19,6 +19,19 @@ def alias_key(value):
 def alias_id(name):
     # This identity survives row moves and spacing changes, but not a renamed alias.
     return "alias_" + hashlib.sha256(alias_key(name).encode()).hexdigest()[:24]
+
+
+def cell_decimal(value, row, column):
+    try:
+        return decimal(value)
+    except UserError:
+        letters = ""
+        while column:
+            column, digit = divmod(column - 1, 26)
+            letters = chr(65 + digit) + letters
+        raise UserError(
+            f"Некорректная сумма в ячейке {letters}{row} листа «Чеки». Проверьте исходную таблицу."
+        ) from None
 
 
 def parse_shares(rows):
@@ -42,6 +55,50 @@ def parse_shares(rows):
             target[key] = share
     regular.update(overrides)
     return regular
+
+
+def monthly_adjustments(source, first, last):
+    """Owner-approved exclusions and corrections, scoped to this source month."""
+    overrides = {}
+    try:
+        ignored = {date.fromisoformat(value) for value in source.get("ignored_dates", [])}
+        if any(not first <= day <= last for day in ignored):
+            raise ValueError()
+        for item in source.get("daily_overrides", []):
+            day = date.fromisoformat(item["date"])
+            key = alias_key(item["model"])
+            expected, amount = decimal(item["expected_usd"]), decimal(item["amount_usd"])
+            identity = (key, day)
+            if (
+                not first <= day <= last
+                or day in ignored
+                or not key
+                or min(expected, amount) < 0
+                or identity in overrides
+            ):
+                raise ValueError()
+            overrides[identity] = (expected, amount)
+    except (KeyError, TypeError, AttributeError, ValueError):
+        raise UserError("Проверьте ignored_dates и daily_overrides в studio.toml.") from None
+    return ignored, overrides
+
+
+def ignored_day_control(rows, number, column):
+    # J:L sum the ten site subtotals. Reconstruct ONLY the excluded day's
+    # contribution for reconciliation; it is never emitted as earned income.
+    details = rows[number - 11 : number - 1]
+    if len(details) != 10 or any(r and r[0] not in (None, "") for r in details):
+        raise UserError(
+            f"Не удалось проверить исключённый день в строке {number} листа «Чеки»: изменился блок площадок."
+        )
+    return sum(
+        (
+            decimal(r[column])
+            for r in details
+            if len(r) > column and type(r[column]) in (int, float) and r[column] > 0
+        ),
+        Decimal(0),
+    )
 
 
 def parse_studio_matrix(rows, share_rows, source):
@@ -68,8 +125,10 @@ def parse_studio_matrix(rows, share_rows, source):
             "Изменились даты или заголовки «Чеки». Проверьте месяц и диапазон источника."
         ) from None
     shares = parse_shares(share_rows)
+    ignored, overrides = monthly_adjustments(source, first, last)
     entries, seen = [], set()
     gross_by_day = [Decimal(0)] * reconciliation_width
+    summary_adjustments = [Decimal(0)] * reconciliation_width
     placeholders = {alias_key(x) for x in source.get("placeholder_names", [])}
     inactive = {alias_key(x) for x in source.get("inactive_names", [])}
     for number, row in enumerate(rows[5:], 6):
@@ -81,9 +140,36 @@ def parse_studio_matrix(rows, share_rows, source):
             raise UserError(f"Некорректное имя модели в строке {number} листа «Чеки».")
         if len(row) < 6 + reconciliation_width or row[1] not in (None, ""):
             raise UserError(f"Изменилась итоговая строка {number} листа «Чеки».")
-        values = [decimal(x) for x in row[6 : 6 + reconciliation_width]]
-        totals = [decimal(x) for x in row[2:5]]
-        calculated = [sum(values[:15]), sum(values[15:]), sum(values)]
+        values, reconciliation_values = [], []
+        for index, raw in enumerate(row[6 : 6 + reconciliation_width]):
+            day = first + timedelta(days=index)
+            if day in ignored:
+                values.append(Decimal(0))
+                reconciliation_values.append(
+                    Decimal(0)
+                    if key in placeholders
+                    else ignored_day_control(rows, number, 6 + index)
+                )
+            else:
+                value = cell_decimal(raw, number, 14 + index)
+                override = overrides.get((key, day))
+                if override:
+                    expected, amount = override
+                    if abs(value - expected) <= Decimal("0.01"):
+                        summary_adjustments[index] += amount - value
+                        value = amount
+                    elif abs(value - amount) > Decimal("0.01"):
+                        raise UserError(
+                            f"Изменилась согласованная сумма в строке {number} листа «Чеки». Проверьте daily_overrides."
+                        )
+                values.append(value)
+                reconciliation_values.append(value)
+        totals = [cell_decimal(x, number, 10 + index) for index, x in enumerate(row[2:5])]
+        calculated = [
+            sum(reconciliation_values[:15]),
+            sum(reconciliation_values[15:]),
+            sum(reconciliation_values),
+        ]
         if any(abs(a - b) > Decimal("0.01") for a, b in zip(totals, calculated)):
             raise UserError(f"Дневные суммы не совпали с итогами в строке {number} листа «Чеки».")
         if key in placeholders:
@@ -118,7 +204,12 @@ def parse_studio_matrix(rows, share_rows, source):
     # Reconcile the complete workbook total to catch omitted/unnamed model rows.
     if len(rows) < 3 or len(rows[2]) < 6 + reconciliation_width or rows[2][1] != "Сумма за день":
         raise UserError("Не найдена контрольная строка «Сумма за день» в листе «Чеки».")
-    summary = [decimal(x) for x in rows[2][6 : 6 + reconciliation_width]]
+    summary = [
+        Decimal(0)
+        if first + timedelta(days=index) in ignored
+        else cell_decimal(x, 3, 14 + index) + summary_adjustments[index]
+        for index, x in enumerate(rows[2][6 : 6 + reconciliation_width])
+    ]
     if any(abs(a - b) > Decimal("0.01") for a, b in zip(gross_by_day, summary)):
         raise UserError(
             "Сумма моделей не совпала с общей выручкой по дням. Проверьте пропущенные имена и итоговые строки «Чеки»."

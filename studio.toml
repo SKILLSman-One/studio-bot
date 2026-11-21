@@ -18,6 +18,11 @@ month = "2026-10"
 range = "'Чеки'!H1:AR"
 shares_range = "'Модели'!G1:J"
 placeholder_names = ["Работающие модели"]
+# Owner-approved correction, 2026-11-21. Source cells remain unchanged.
+# Use the site sum on October 25; guard against a changed model/day/value.
+daily_overrides = [
+  { model = "Лена Rose", date = "2026-10-25", expected_usd = "355.45", amount_usd = "348.30" }
+]
 
 # For another month, add a separate studio_daily_share source with its file,
 # month and verified ranges. Keep previous sources for historical periods.
@@ -56,6 +61,9 @@ range = "'Чеки'!H1:AR"
 shares_range = "'Модели'!G1:J"
 placeholder_names = ["Работающие модели"]
 totals_include_next_month_day = true
+# Owner requested excluding this entire daily column for ALL models.
+# Income was moved to another day; no source cells are modified.
+ignored_dates = ["2026-11-18"]
 
 [room_photos]
 "4" = ["assets/rooms/4-1.png", "assets/rooms/4-2.png"]

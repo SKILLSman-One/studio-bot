@@ -133,7 +133,7 @@ def test_server_batch_reader_and_overlap(tmp_path, monkeypatch):
     ]
     assert not session.post.called
     settings.sources.append(dict(source))
-    with pytest.raises(UserError, match="record_id"):
+    with pytest.raises(UserError, match="несколько источников за один месяц"):
         SheetsPayroll(settings)._read_sync()
 
 

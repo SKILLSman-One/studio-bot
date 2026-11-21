@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import calendar
 import csv
 import io
 import re
@@ -110,13 +111,24 @@ def parse_rows(rows, columns=None):
 
 
 @dataclass(frozen=True)
+class SourceIssue:
+    start: date
+    end: date
+    message: str
+
+
+@dataclass(frozen=True)
 class Snapshot:
     entries: tuple[Entry, ...]
     fetched_at: datetime
     coverage: tuple[tuple[date, date], ...] | None = None
     basis: str = DEFAULT_BASIS
+    issues: tuple[SourceIssue, ...] = ()
 
     def require_period(self, start, end):
+        for issue in self.issues:
+            if start <= issue.end and issue.start <= end:
+                raise UserError(issue.message)
         if self.coverage is None:
             return
         day = start
@@ -146,6 +158,12 @@ class Snapshot:
 
     def names(self, *, active_only=False):
         entries = self.entries
+        if active_only and self.issues:
+            # A failed latest month must never resurrect the previous month's roster.
+            latest = max([a for a, _ in self.coverage or ()] + [i.start for i in self.issues])
+            for issue in self.issues:
+                if issue.start == latest:
+                    raise UserError(issue.message)
         if active_only and entries:
             latest_month = max(e.day for e in entries).strftime("%Y-%m")
             entries = tuple(e for e in entries if e.day.strftime("%Y-%m") == latest_month)
@@ -154,6 +172,7 @@ class Snapshot:
         return {entry.model_id: entry.name for entry in entries}
 
     def amount(self, mid, period, *, gross=False):
+        self.require_period(*period)
         if self.coverage is not None and mid not in self.names():
             raise UserError(
                 "Псевдоним модели не найден в подключённых таблицах. Проверьте зарплатную привязку."
@@ -162,7 +181,7 @@ class Snapshot:
 
 
 class SheetsPayroll:
-    """Private Sheets, read-only scope, whole-snapshot validation; no stale fallback."""
+    """Private Sheets, read-only scope, validation per month; no stale fallback."""
 
     def __init__(self, settings):
         self.settings = settings
@@ -190,6 +209,7 @@ class SheetsPayroll:
             raise UserError(
                 "Не смешивайте выручку × процент и готовые начисления в одном источнике зарплат."
             )
+        configured_periods = []
         for source in self.settings.sources:
             if source.get("format", "rows") not in ("rows", "studio_daily_share"):
                 raise UserError("Неизвестный формат зарплатного источника.")
@@ -200,6 +220,21 @@ class SheetsPayroll:
                 raise UserError(
                     "Нужно подтвердить правило заработка: выручка × процент модели до удержаний, либо подключить готовую ведомость."
                 )
+            if not re.fullmatch(r"[A-Za-z0-9_-]{10,}", source.get("spreadsheet_id", "")):
+                raise UserError("Проверьте spreadsheet_id в studio.toml.")
+            if source.get("format") == "studio_daily_share":
+                try:
+                    first = date.fromisoformat(source["month"] + "-01")
+                    last = first.replace(day=calendar.monthrange(first.year, first.month)[1])
+                except (KeyError, TypeError, ValueError):
+                    raise UserError(
+                        "Проверьте month зарплатного источника в studio.toml."
+                    ) from None
+                if (first, last) in configured_periods:
+                    raise UserError(
+                        "Подключено несколько источников за один месяц. Уберите пересечение."
+                    )
+                configured_periods.append((first, last))
 
         try:
             creds = Credentials.from_service_account_file(
@@ -208,29 +243,45 @@ class SheetsPayroll:
             )
             entries = []
             coverage = []
+            issues = []
             with AuthorizedSession(creds, refresh_timeout=15) as session:
                 for source in self.settings.sources:
                     sid = source["spreadsheet_id"]
-                    if not re.fullmatch(r"[A-Za-z0-9_-]{10,}", sid):
-                        raise UserError("Проверьте spreadsheet_id в studio.toml.")
                     if source.get("format") == "studio_daily_share":
                         # One batch request keeps daily gross and shares in the same response.
-                        response = session.get(
-                            f"https://sheets.googleapis.com/v4/spreadsheets/{sid}/values:batchGet",
-                            params={
-                                "ranges": [source["range"], source["shares_range"]],
-                                "valueRenderOption": "UNFORMATTED_VALUE",
-                                "dateTimeRenderOption": "SERIAL_NUMBER",
-                            },
-                            timeout=20,
-                        )
-                        response.raise_for_status()
-                        ranges = response.json()["valueRanges"]
-                        if len(ranges) != 2:
-                            raise UserError("Google вернул неполный набор зарплатных диапазонов.")
-                        parsed, period = parse_studio_matrix(
-                            ranges[0].get("values", []), ranges[1].get("values", []), source
-                        )
+                        first = date.fromisoformat(source["month"] + "-01")
+                        last = first.replace(day=calendar.monthrange(first.year, first.month)[1])
+                        try:
+                            response = session.get(
+                                f"https://sheets.googleapis.com/v4/spreadsheets/{sid}/values:batchGet",
+                                params={
+                                    "ranges": [source["range"], source["shares_range"]],
+                                    "valueRenderOption": "UNFORMATTED_VALUE",
+                                    "dateTimeRenderOption": "SERIAL_NUMBER",
+                                },
+                                timeout=20,
+                            )
+                            response.raise_for_status()
+                            ranges = response.json()["valueRanges"]
+                            if len(ranges) != 2:
+                                raise UserError(
+                                    "Google вернул неполный набор зарплатных диапазонов."
+                                )
+                            parsed, period = parse_studio_matrix(
+                                ranges[0].get("values", []), ranges[1].get("values", []), source
+                            )
+                        except Exception as error:
+                            detail = (
+                                str(error)
+                                if isinstance(error, UserError)
+                                else "Не удалось прочитать Google-таблицу. Проверьте сеть и доступ сервисного аккаунта."
+                            )
+                            issues.append(
+                                SourceIssue(
+                                    first, last, f"Данные за {first:%Y-%m} недоступны: {detail}"
+                                )
+                            )
+                            continue
                         entries.extend(parsed)
                         coverage.append(period)
                     else:
@@ -247,6 +298,8 @@ class SheetsPayroll:
                         entries.extend(
                             parse_rows(response.json().get("values", []), source.get("columns"))
                         )
+            if issues and not coverage:
+                raise UserError("\n".join(issue.message for issue in issues))
             identifiers = [entry.record_id for entry in entries]
             if len(set(identifiers)) != len(identifiers):
                 raise UserError(
@@ -270,6 +323,7 @@ class SheetsPayroll:
                 datetime.now(timezone.utc),
                 tuple(coverage) if all(matrix) else None,
                 SHARE_BASIS if all(matrix) else DEFAULT_BASIS,
+                tuple(issues),
             )
         except UserError:
             raise
@@ -302,7 +356,7 @@ class SheetsPayroll:
                 self.last_months = tuple(
                     sorted({entry.day.strftime("%Y-%m") for entry in self.cache.entries})
                 )
-                self.last_error = None
+                self.last_error = "\n".join(i.message for i in self.cache.issues) or None
             return self.cache
 
 

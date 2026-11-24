@@ -882,7 +882,7 @@ class UI:
         self.binding_person(target)
         from .studio_sheet import alias_key
 
-        names = snapshot.names(active_only=True)
+        names = snapshot.names(active_only=True, require_share=True)
         counts = Counter(alias_key(name) for name in names.values())
         used = {
             row["payroll_id"]
@@ -964,7 +964,7 @@ class UI:
             from .studio_sheet import alias_key
 
             mid, name = state["selected"]
-            names = snapshot.names(active_only=True)
+            names = snapshot.names(active_only=True, require_share=True)
             if (
                 names.get(mid) != name
                 or sum(alias_key(n) == alias_key(name) for n in names.values()) != 1
@@ -1019,6 +1019,18 @@ class UI:
                 google = "часть месяцев недоступна\n" + "\n".join(
                     issue.message for issue in snapshot.issues
                 )
+            if snapshot.entries:
+                latest = max(entry.day for entry in snapshot.entries).strftime("%Y-%m")
+                missing = {
+                    entry.model_id for entry in snapshot.entries
+                    if entry.day.strftime("%Y-%m") == latest
+                    and not entry.share_available and not entry.inactive
+                }
+                if missing:
+                    google += (
+                        f"\nБез процента в последнем месяце: {len(missing)}. "
+                        "Их заработок с ненулевой выручкой недоступен; остальные модели доступны."
+                    )
         except UserError as error:
             google = "ошибка: " + str(error)
         except Exception:

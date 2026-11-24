@@ -64,6 +64,16 @@ totals_include_next_month_day = true
 # Owner requested excluding this entire daily column for ALL models.
 # Income was moved to another day; no source cells are modified.
 ignored_dates = ["2026-11-18"]
+# Verified against historical Checks labels on 2026-11-24. Only word order changed.
+# Preserve existing employee bindings; do not merge distinct Mia aliases.
+[payroll_sources.identity_aliases]
+"Lilly Алина" = "Алина Lilly"
+"Sindel Ксюша" = "Ксюша Sindel"
+"Megan Василина" = "Василина Megan"
+"Rebecca Апа" = "Апа Rebecca"
+"Julia Дарья" = "Дарья Julia"
+"Mia Даша" = "Даша Mia"
+"Rose Лена" = "Лена Rose"
 
 [room_photos]
 "4" = ["assets/rooms/4-1.png", "assets/rooms/4-2.png"]

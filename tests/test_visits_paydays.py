@@ -268,5 +268,5 @@ async def test_inactive_aliases_do_not_block_other_models_or_offer_binding(ui):
     assert ui.payroll.get.return_value.amount(
         "old", (date(2026, 9, 1), date(2026, 9, 30)), gross=True
     ) == Decimal("70")
-    with pytest.raises(UserError, match="бывшего"):
+    with pytest.raises(UserError, match="процент"):
         ui.payroll.get.return_value.amount("old", (date(2026, 9, 1), date(2026, 9, 30)))

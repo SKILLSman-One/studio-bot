@@ -55,11 +55,31 @@ async def delivery_loop(store, bots):
 
 
 async def payroll_loop(payroll):
+    last_status = None
     while True:
         try:
-            await payroll.get(force=True)
-        except Exception:
-            pass  # UI reports the source error; never substitute stale payroll.
+            snapshot = await payroll.get(force=True)
+            months = tuple(sorted({e.day.strftime("%Y-%m") for e in snapshot.entries}))
+            latest = months[-1] if months else ""
+            current = [e for e in snapshot.entries if e.day.strftime("%Y-%m") == latest]
+            models = len({e.model_id for e in current})
+            missing = len({e.model_id for e in current if not e.share_available and not e.inactive})
+            unavailable = len(snapshot.issues)
+            status = ("read", months, models, missing, unavailable)
+            message = (
+                "Google Sheets: чтение "
+                + ("частичное" if unavailable else "успешно")
+                + f"; месяцы: {', '.join(months) or 'нет данных'}"
+                + f"; моделей в последнем прочитанном месяце: {models}"
+                + f"; без процента: {missing}; недоступных источников: {unavailable}."
+            )
+        except Exception as error:
+            # Exception text may contain credentials or HTTP URLs. Types only.
+            status = ("error", type(error).__name__)
+            message = f"Google Sheets: чтение не удалось ({type(error).__name__}). Проверьте «Состояние бота»."
+        if status != last_status:
+            print(message, flush=True)
+            last_status = status
         await asyncio.sleep(60)
 
 

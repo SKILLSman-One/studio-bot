@@ -101,6 +101,29 @@ def ignored_day_control(rows, number, column):
     )
 
 
+def identity_aliases(source):
+    """Preserve verified historical IDs when only the order of name words changed."""
+    result = {}
+    try:
+        for current, canonical in source.get("identity_aliases", {}).items():
+            key, target = alias_key(current), alias_key(canonical)
+            if (
+                not key
+                or key in result
+                or not isinstance(canonical, str)
+                or len(canonical) > 60
+                or any(ord(c) < 32 for c in canonical)
+                or sorted(key.split()) != sorted(target.split())
+            ):
+                raise ValueError()
+            result[key] = canonical
+    except (AttributeError, TypeError, ValueError):
+        raise UserError(
+            "Проверьте identity_aliases в studio.toml: допустима только перестановка тех же слов."
+        ) from None
+    return result
+
+
 def parse_studio_matrix(rows, share_rows, source):
     """H1:AR…: name in H, site in I, totals J:L, dates/daily gross N:AR."""
     try:
@@ -125,6 +148,7 @@ def parse_studio_matrix(rows, share_rows, source):
             "Изменились даты или заголовки «Чеки». Проверьте месяц и диапазон источника."
         ) from None
     shares = parse_shares(share_rows)
+    aliases = identity_aliases(source)
     ignored, overrides = monthly_adjustments(source, first, last)
     entries, seen = [], set()
     gross_by_day = [Decimal(0)] * reconciliation_width
@@ -178,15 +202,13 @@ def parse_studio_matrix(rows, share_rows, source):
                     "У служебной строки есть выручка. Укажите модель в исходной таблице."
                 )
             continue
-        if key in seen:
+        mid = alias_id(aliases.get(key, name))
+        if mid in seen:
             raise UserError(
                 "Модель повторяется в итоговых строках «Чеки». Двойной подсчёт остановлен."
             )
-        seen.add(key)
-        if key not in shares and key not in inactive:
-            raise UserError(f"Для итоговой строки {number} не найден процент в листе «Модели».")
+        seen.add(mid)
         gross_by_day = [a + b for a, b in zip(gross_by_day, values)]
-        mid = alias_id(name)
         for day, gross in zip(days, values):
             entries.append(
                 Entry(
@@ -194,9 +216,14 @@ def parse_studio_matrix(rows, share_rows, source):
                     day,
                     name=" ".join(name.split()),
                     model_id=mid,
-                    amount=gross * shares[key] if key in shares else None,
+                    amount=gross * shares[key]
+                    if key in shares
+                    else Decimal(0)
+                    if gross == 0
+                    else None,
                     gross=gross,
                     inactive=key in inactive,
+                    share_available=key in shares,
                 )
             )
     if not seen:

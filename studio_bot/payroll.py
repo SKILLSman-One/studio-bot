@@ -68,6 +68,7 @@ class Entry:
     amount: Decimal | None
     gross: Decimal | None = None
     inactive: bool = False
+    share_available: bool = True
 
 
 def parse_rows(rows, columns=None):
@@ -148,7 +149,7 @@ class Snapshot:
                 if value is None:
                     if not gross:
                         raise UserError(
-                            "Для бывшего сотрудника нет исторического процента. Зарплата за этот период не определена."
+                            "Для этой модели не указан процент на листе «Модели». Обратитесь к администратору; заработок не рассчитан."
                         )
                     raise UserError(
                         "В этом источнике нет полного оборота. Подключите вкладку «Чеки»; начисления модели не заменяют оборот."
@@ -156,7 +157,7 @@ class Snapshot:
                 totals[entry.model_id] = totals.get(entry.model_id, Decimal(0)) + value
         return totals
 
-    def names(self, *, active_only=False):
+    def names(self, *, active_only=False, require_share=False):
         entries = self.entries
         if active_only and self.issues:
             # A failed latest month must never resurrect the previous month's roster.
@@ -169,6 +170,8 @@ class Snapshot:
             entries = tuple(e for e in entries if e.day.strftime("%Y-%m") == latest_month)
             inactive = {e.model_id for e in entries if e.inactive}
             entries = tuple(e for e in entries if e.model_id not in inactive)
+        if require_share:
+            entries = tuple(e for e in entries if e.share_available)
         return {entry.model_id: entry.name for entry in entries}
 
     def amount(self, mid, period, *, gross=False):
@@ -310,7 +313,14 @@ class SheetsPayroll:
                 if entry.model_id in names and alias_key(names[entry.model_id]) != alias_key(
                     entry.name
                 ):
-                    raise UserError("Один model_id связан с разными именами в зарплатной таблице.")
+                    # Matrix aliases are explicitly validated in parse_studio_matrix.
+                    # Flat sources must retain their stricter ID/name contract.
+                    if not all(matrix) or sorted(
+                        alias_key(names[entry.model_id]).split()
+                    ) != sorted(alias_key(entry.name).split()):
+                        raise UserError(
+                            "Один model_id связан с разными именами в зарплатной таблице."
+                        )
                 names[entry.model_id] = entry.name
             if coverage:
                 for index, (a, b) in enumerate(coverage):

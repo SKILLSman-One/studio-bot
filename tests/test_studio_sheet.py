@@ -67,7 +67,6 @@ def test_real_layout_and_override_only_counts_model_totals():
         "duplicate",
         "placeholder_money",
         "formula_error",
-        "missing_percent",
         "invalid_percent",
         "moved_month",
         "mismatch",
@@ -83,8 +82,6 @@ def test_matrix_problems_stop_the_entire_snapshot(problem):
         rows[7] = ["Работающие модели", *rows[6][1:]]
     elif problem == "formula_error":
         rows[6][6] = "#REF!"
-    elif problem == "missing_percent":
-        shares = shares[:1]
     elif problem == "invalid_percent":
         shares[1][3] = 60
     elif problem == "moved_month":
@@ -178,14 +175,14 @@ def test_september_totals_reconcile_october_tail_without_counting_it():
 def test_declared_former_model_keeps_gross_without_inventing_percentage():
     rows, shares, source = fixture_rows()
     shares = shares[:1]
-    with pytest.raises(UserError, match="процент"):
-        parse_studio_matrix(rows, shares, source)
+    entries, coverage = parse_studio_matrix(rows, shares, source)
+    assert any(entry.amount is None for entry in entries)
     source["inactive_names"] = ["Анна Test"]
     entries, coverage = parse_studio_matrix(rows, shares, source)
     snap = Snapshot(tuple(entries), datetime.now(timezone.utc), (coverage,))
     assert not snap.names(active_only=True)
     assert snap.amount(alias_id("Анна Test"), coverage, gross=True) == Decimal(140)
-    with pytest.raises(UserError, match="бывшего"):
+    with pytest.raises(UserError, match="процент"):
         snap.amount(alias_id("Анна Test"), coverage)
     rows[6][4] = 900
     with pytest.raises(UserError, match="Дневные суммы"):

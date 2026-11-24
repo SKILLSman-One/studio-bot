@@ -14,6 +14,7 @@ from dotenv import dotenv_values, set_key
 
 from . import __version__
 from .auth import AdminAuth, hash_password
+from .backup import backup_before_start
 from .config import ROOT, Settings, UserError
 from .lock import InstanceLock
 from .payroll import SheetsPayroll
@@ -183,6 +184,7 @@ def main():
             else:
                 validate_local(settings)
                 with InstanceLock(settings.data / "app.lock"):
+                    backup_before_start(settings)
                     asyncio.run(run(settings))
         return 0
     except KeyboardInterrupt:

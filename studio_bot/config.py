@@ -37,6 +37,7 @@ class Settings:
     payroll_period: str = "monthly"
     room_photos: dict[str, list[str]] = field(default_factory=dict)
     backup_request: str = ""
+    export_request: str = ""
 
     def photos(self, room):
         paths = []
@@ -87,6 +88,7 @@ class Settings:
                 payroll_period=conf.get("payroll_period", "monthly"),
                 room_photos=conf.get("room_photos", {}),
                 backup_request=values.get("STUDIO_BACKUP_REQUEST", "") or "",
+                export_request=values.get("STUDIO_EXPORT_REQUEST", "") or "",
             )
             if settings.payroll_period not in ("monthly", "semimonthly"):
                 raise ValueError()
